@@ -26,10 +26,11 @@ DATA_SOURCE_CHOICES: tuple[tuple[DataSourceKind, str], ...] = (
     ("tradingview", "TradingView"),
     ("akshare", "AkShare（A股）"),
     ("eastmoney", "东方财富（A股）"),
+    ("tushare", "TuShare（A股）"),
 )
 
 _HIDDEN_KINDS: frozenset[DataSourceKind] = frozenset(
-    {"tushare", "yfinance", "eastmoney_futures"}
+    {"yfinance", "eastmoney_futures"}
 )
 
 _DEFAULT_SYMBOLS: dict[DataSourceKind, str] = {

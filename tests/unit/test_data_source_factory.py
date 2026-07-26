@@ -34,9 +34,9 @@ def test_ashare_sources_in_ui_choices():
     assert "eastmoney" in ui_kinds
 
 
-def test_tushare_not_in_ui_choices():
+def test_tushare_in_ui_choices():
     ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
-    assert "tushare" not in ui_kinds
+    assert "tushare" in ui_kinds
 
 
 def test_create_data_source_returns_expected_types():

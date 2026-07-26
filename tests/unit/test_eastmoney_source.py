@@ -1,10 +1,114 @@
 """Unit tests for the built-in East Money data source."""
 from __future__ import annotations
 
+from datetime import date, datetime
 from types import SimpleNamespace
 
 import pa_agent.data.eastmoney_source as eastmoney_source
 from pa_agent.data.eastmoney_source import EastMoneySource
+
+
+def test_date_range_is_inclusive_and_clears_snapshot_cache():
+    source = EastMoneySource()
+    source._snap_cache_n = 10
+    source._snap_cache_bars = [object()]
+
+    source.set_date_range("2025-06-07", "2025-07-01")
+
+    assert source.date_range == (date(2025, 6, 7), date(2025, 7, 1))
+    assert source._snap_cache_n == 0
+    assert source._snap_cache_bars == []
+
+    rows = [
+        {
+            "ts_open": datetime(
+                2025, 6, 6, 15, tzinfo=eastmoney_source._CN_TZ
+            ).timestamp()
+            * 1000
+        },
+        {
+            "ts_open": datetime(
+                2025, 6, 7, 15, tzinfo=eastmoney_source._CN_TZ
+            ).timestamp()
+            * 1000
+        },
+        {
+            "ts_open": datetime(
+                2025, 7, 1, 15, tzinfo=eastmoney_source._CN_TZ
+            ).timestamp()
+            * 1000
+        },
+        {
+            "ts_open": datetime(
+                2025, 7, 2, 15, tzinfo=eastmoney_source._CN_TZ
+            ).timestamp()
+            * 1000
+        },
+    ]
+    assert source._filter_rows_by_date(rows) == rows[1:3]
+
+
+def test_date_range_rejects_reversed_dates():
+    source = EastMoneySource()
+
+    try:
+        source.set_date_range("2025-07-01", "2025-06-07")
+    except ValueError as exc:
+        assert "开始日期" in str(exc)
+    else:
+        raise AssertionError("reversed date range should fail")
+
+
+def test_daily_date_range_is_forwarded_to_eastmoney(monkeypatch):
+    source = EastMoneySource()
+    source.set_date_range("2025-06-07", "2025-07-01")
+    captured = {}
+
+    def _fetch(symbol, **kwargs):
+        captured["symbol"] = symbol
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(eastmoney_source, "fetch_stock_period", _fetch)
+
+    assert source._fetch_daily("600519", 100, timeframe="1d") == []
+    assert captured == {
+        "symbol": "600519",
+        "timeframe": "1d",
+        "start_date": "20250607",
+        "end_date": "20250701",
+        "adjust": "qfq",
+        "is_index": False,
+    }
+
+
+def test_historical_date_range_marks_newest_bar_closed(monkeypatch):
+    source = EastMoneySource()
+    source.connect()
+    source.subscribe("600519", "1d")
+    source.set_date_range("2025-06-07", "2025-07-01")
+    ts_ms = (
+        datetime(2025, 7, 1, 15, tzinfo=eastmoney_source._CN_TZ).timestamp()
+        * 1000
+    )
+    rows = [
+        {
+            "ts_open": ts_ms,
+            "open": 10.0,
+            "high": 11.0,
+            "low": 9.0,
+            "close": 10.5,
+            "volume": 100.0,
+        }
+    ]
+    monkeypatch.setattr(source, "_fetch_history", lambda *_args: rows)
+    monkeypatch.setattr(eastmoney_source, "_ashare_head_bar_live", lambda _tf: True)
+
+    bars = source.latest_snapshot(1)
+
+    assert len(bars) == 1
+    assert bars[0].closed is True
+    assert source.latest_order_book() is None
 
 
 def test_intraday_spot_refresh_uses_module_level_fetch(monkeypatch):

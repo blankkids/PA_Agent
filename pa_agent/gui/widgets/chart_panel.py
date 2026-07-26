@@ -105,7 +105,7 @@ class ChartPanel(QWidget):
         footer_layout.setContentsMargins(14, 0, 14, 0)
         footer_layout.setSpacing(10)
 
-        self._footer_hint_text = "滚轮缩放 · 拖拽平移 · 当前为分析快照"
+        self._footer_hint_text = "移动查看K线详情 · 单击锁定/解除 · 滚轮缩放 · 拖拽平移"
         self._footer_left = QLabel(self._footer_hint_text)
         self._footer_left.setStyleSheet(
             "font-size: 11px; color: #8b949e;"

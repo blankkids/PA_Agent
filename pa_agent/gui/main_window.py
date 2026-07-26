@@ -4,11 +4,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import QDate, QThread, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QCloseEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateEdit,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -415,8 +416,8 @@ class MainWindow(QMainWindow):
             self._data_source_combo.setCurrentIndex(ds_index)
         self._data_source_combo.setMinimumWidth(108)
         self._data_source_combo.setToolTip(
-            "K 线数据来源：MT5（需终端登录）、TradingView（tvDatafeed）、"
-            "本地仅支持 MT5 与 TradingView"
+            "K 线数据来源：MT5、TradingView、AkShare、东方财富、TuShare；"
+            "TuShare 使用前需在「其他通用设置」中填写 Token"
         )
         self._data_source_combo.currentIndexChanged.connect(
             self._on_data_source_combo_changed
@@ -521,6 +522,41 @@ class MainWindow(QMainWindow):
         ctrl_layout.addWidget(self._tf_combo)
         self._populate_timeframe_combo_for_source()
         self._sync_tv_exchange_visibility()
+
+        # Optional inclusive history range, available only for East Money A-shares.
+        self._eastmoney_date_filter_checkbox = QCheckBox("日期筛选")
+        self._eastmoney_date_filter_checkbox.setToolTip(
+            "仅获取所选开始日期至结束日期（包含首尾日期）的 K 线"
+        )
+        self._eastmoney_date_start_label = QLabel("从:")
+        self._eastmoney_date_start = QDateEdit()
+        self._eastmoney_date_start.setDisplayFormat("yyyy-MM-dd")
+        self._eastmoney_date_start.setCalendarPopup(True)
+        self._eastmoney_date_start.setDate(QDate.currentDate().addMonths(-1))
+        self._eastmoney_date_start.setMaximumDate(QDate.currentDate())
+        self._eastmoney_date_end_label = QLabel("到:")
+        self._eastmoney_date_end = QDateEdit()
+        self._eastmoney_date_end.setDisplayFormat("yyyy-MM-dd")
+        self._eastmoney_date_end.setCalendarPopup(True)
+        self._eastmoney_date_end.setDate(QDate.currentDate())
+        self._eastmoney_date_end.setMaximumDate(QDate.currentDate())
+        self._eastmoney_date_end.setMinimumDate(self._eastmoney_date_start.date())
+        self._eastmoney_date_start.dateChanged.connect(
+            self._eastmoney_date_end.setMinimumDate
+        )
+        self._eastmoney_date_filter_checkbox.toggled.connect(
+            self._on_eastmoney_date_filter_toggled
+        )
+        for widget in (
+            self._eastmoney_date_filter_checkbox,
+            self._eastmoney_date_start_label,
+            self._eastmoney_date_start,
+            self._eastmoney_date_end_label,
+            self._eastmoney_date_end,
+        ):
+            ctrl_layout.addWidget(widget)
+        self._on_eastmoney_date_filter_toggled(False)
+        self._sync_eastmoney_date_filter_visibility()
 
         ctrl_layout.addStretch()
 
@@ -1001,6 +1037,56 @@ class MainWindow(QMainWindow):
         if not available:
             panel.clear()
 
+    def _sync_eastmoney_date_filter_visibility(self) -> None:
+        """Show the date-range controls only for the East Money A-share source."""
+        visible = (
+            self._current_data_source_kind() == "eastmoney"
+            and not getattr(self, "_demo_mode", False)
+        )
+        checked = bool(
+            getattr(self, "_eastmoney_date_filter_checkbox", None)
+            and self._eastmoney_date_filter_checkbox.isChecked()
+        )
+        for widget in (
+            getattr(self, "_eastmoney_date_filter_checkbox", None),
+            getattr(self, "_eastmoney_date_start_label", None),
+            getattr(self, "_eastmoney_date_start", None),
+            getattr(self, "_eastmoney_date_end_label", None),
+            getattr(self, "_eastmoney_date_end", None),
+        ):
+            if widget is not None:
+                widget.setVisible(visible)
+        for widget in (
+            getattr(self, "_eastmoney_date_start_label", None),
+            getattr(self, "_eastmoney_date_start", None),
+            getattr(self, "_eastmoney_date_end_label", None),
+            getattr(self, "_eastmoney_date_end", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(visible and checked)
+
+    def _on_eastmoney_date_filter_toggled(self, _checked: bool) -> None:
+        self._sync_eastmoney_date_filter_visibility()
+
+    def _apply_eastmoney_date_filter_to_source(self, data_source: Any) -> bool:
+        """Copy the GUI range to EastMoneySource before a refresh starts."""
+        if self._current_data_source_kind() != "eastmoney":
+            return True
+        setter = getattr(data_source, "set_date_range", None)
+        if not callable(setter):
+            return True
+        try:
+            if self._eastmoney_date_filter_checkbox.isChecked():
+                start = self._eastmoney_date_start.date().toPyDate()
+                end = self._eastmoney_date_end.date().toPyDate()
+                setter(start, end)
+            else:
+                setter(None, None)
+            return True
+        except ValueError as exc:
+            self._status_bar.showMessage(f"日期筛选无效：{exc}")
+            return False
+
     def _on_eastmoney_market_panel_toggled(self, _checked: bool) -> None:
         """Apply the user's session-level market-panel visibility preference."""
         self._sync_eastmoney_order_book_visibility()
@@ -1377,6 +1463,7 @@ class MainWindow(QMainWindow):
             self._active_data_source_kind = kind
             self._sync_tv_exchange_visibility()
             self._sync_eastmoney_order_book_visibility()
+            self._sync_eastmoney_date_filter_visibility()
             self._apply_gold_defaults_for_data_source(kind)
 
             # Restore saved TV exchange before applying to data source
@@ -1403,6 +1490,8 @@ class MainWindow(QMainWindow):
                 new_source.on_probe_status = self._on_tv_probe_status
             new_source.connect()
             self._apply_tv_exchange_to_source(new_source)
+            if not self._apply_eastmoney_date_filter_to_source(new_source):
+                raise ValueError("东方财富日期筛选无效")
             new_source.subscribe(symbol, timeframe)
 
             self._ctx.data_source = new_source
@@ -1606,6 +1695,12 @@ class MainWindow(QMainWindow):
         if data_source is None or not getattr(data_source, "_connected", False):
             self._status_bar.showMessage("数据源未连接，请先切换数据来源")
             return
+
+        if self._current_data_source_kind() == "eastmoney":
+            # Stop first so the worker cannot read the range while it is changing.
+            self._stop_refresh_loop()
+            if not self._apply_eastmoney_date_filter_to_source(data_source):
+                return
 
         # Apply any pending symbol/timeframe change before fetching.
         # If the user typed a new symbol/tf and clicked 「获取数据」, honour it.
@@ -2716,6 +2811,7 @@ class MainWindow(QMainWindow):
             ds_combo.setEnabled(False)
         self._sync_tv_exchange_visibility()
         self._sync_eastmoney_order_book_visibility()
+        self._sync_eastmoney_date_filter_visibility()
 
         meta = record.meta
         self._symbol_combo.blockSignals(True)
@@ -2865,6 +2961,7 @@ class MainWindow(QMainWindow):
             ds_combo.setEnabled(True)
         self._sync_tv_exchange_visibility()
         self._sync_eastmoney_order_book_visibility()
+        self._sync_eastmoney_date_filter_visibility()
         self._demo_mode_label.hide()
         self._analysis_in_progress = False
         self._set_chart_refresh_paused(False)
