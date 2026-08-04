@@ -292,7 +292,9 @@ def _provider_max_output_tokens(settings: AIProviderSettings) -> int:
     model = (settings.model or "").lower()
     if _is_packyapi(settings.base_url) and "claude" in model:
         return _PACKY_CLAUDE_MAX_OUTPUT_TOKENS
-    if _is_deepseek_native(settings.base_url):
+    # DeepSeek output limits apply to the model even when it is served through
+    # an OpenAI-compatible distributor/proxy rather than api.deepseek.com.
+    if _is_deepseek_native(settings.base_url) or _is_deepseek_model(model):
         return _DEEPSEEK_MAX_OUTPUT_TOKENS
     if _is_mimo(settings):
         return mimo_max_output_tokens(settings.model)

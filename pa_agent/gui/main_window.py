@@ -36,6 +36,37 @@ logger = logging.getLogger(__name__)
 # Zombie timeout in milliseconds (5 seconds)
 _WORKER_JOIN_TIMEOUT_MS = 5000
 
+# UI widths below are authored for a 1920 logical-pixel desktop.  Qt already
+# converts physical pixels according to the operating-system DPI setting, so
+# availableGeometry() is the right input here (rather than devicePixelRatio()).
+_REFERENCE_SCREEN_WIDTH = 1920
+_MIN_UI_WIDTH_SCALE = 0.72
+
+
+def _ui_width_scale(available_width: int) -> float:
+    """Return a bounded width scale for the current screen's logical pixels."""
+    if available_width <= 0:
+        return 1.0
+    return max(
+        _MIN_UI_WIDTH_SCALE,
+        min(1.0, available_width / _REFERENCE_SCREEN_WIDTH),
+    )
+
+
+def _fit_dimension_to_screen(
+    available: int,
+    *,
+    preferred: int,
+    floor: int,
+    margin: int = 64,
+) -> int:
+    """Choose an initial window dimension that stays inside available space."""
+    if available <= 0:
+        return preferred
+    usable = max(1, available - margin)
+    target = max(min(floor, available), min(preferred, usable))
+    return min(target, available)
+
 
 def _qobject_alive(obj: QObject | None) -> bool:
     """Return False when the underlying Qt C++ object has been destroyed."""
@@ -248,8 +279,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             "PA Agent — Trading Terminal（分析仅供参考，不构成投资建议）"
         )
-        self.resize(1440, 900)
         self._ctx = ctx
+        self._screen_change_connected = False
         self._worker: _AnalysisWorker | None = None
         self._analysis_worker_id: object | None = None
         self._prep_worker: Any = None
@@ -295,6 +326,8 @@ class MainWindow(QMainWindow):
         self._status_bar: QStatusBar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._setup_ui()
+        self._apply_responsive_dimensions()
+        self._fit_window_to_screen(initial=True)
         self._connect_event_bus()
         self._update_ai_mode_label()
         self._sync_submit_button_state()
@@ -386,9 +419,16 @@ class MainWindow(QMainWindow):
         outer_layout.setContentsMargins(8, 8, 8, 8)
         outer_layout.setSpacing(6)
 
-        # ── Control bar ───────────────────────────────────────────────────────
+        # ── Responsive control bars ───────────────────────────────────────────
+        # Actions normally stay on the same row as the data selectors.  They are
+        # moved to the second row only when the measured minimum width would not
+        # fit the active screen.
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setSpacing(8)
+        action_layout = QHBoxLayout()
+        action_layout.setSpacing(8)
+        self._primary_controls_layout = ctrl_layout
+        self._action_controls_layout = action_layout
 
         _settings = getattr(self._ctx, "settings", None)
         _last_symbol = "XAUUSDm"
@@ -565,7 +605,7 @@ class MainWindow(QMainWindow):
         self._fetch_data_btn.setMinimumWidth(90)
         self._fetch_data_btn.setToolTip("开始从当前数据源持续拉取 K 线数据并实时更新图表")
         self._fetch_data_btn.clicked.connect(self._on_fetch_data_clicked)
-        ctrl_layout.addWidget(self._fetch_data_btn)
+        action_layout.addWidget(self._fetch_data_btn)
 
         self._wait_close_checkbox = QCheckBox("等待最新K线收盘后再提交分析")
         self._wait_close_checkbox.setObjectName("waitCloseCheckbox")
@@ -574,18 +614,18 @@ class MainWindow(QMainWindow):
             "勾选后，点击提交分析将先等待当前未收盘K线走完，再抓取数据并开始分析"
         )
         self._wait_close_checkbox.stateChanged.connect(self._on_wait_close_checkbox_changed)
-        ctrl_layout.addWidget(self._wait_close_checkbox)
+        action_layout.addWidget(self._wait_close_checkbox)
 
         self._wait_close_countdown_label = QLabel("")
         self._wait_close_countdown_label.setObjectName("mutedLabel")
         self._wait_close_countdown_label.setMinimumWidth(100)
-        ctrl_layout.addWidget(self._wait_close_countdown_label)
+        action_layout.addWidget(self._wait_close_countdown_label)
 
         self._submit_btn = QPushButton("提交分析")
         self._submit_btn.setObjectName("primaryButton")
         self._submit_btn.setMinimumWidth(100)
         self._submit_btn.clicked.connect(self._on_submit_analysis)
-        ctrl_layout.addWidget(self._submit_btn)
+        action_layout.addWidget(self._submit_btn)
 
         # Incremental button is kept for programmatic use but hidden from the
         # toolbar — the submit button's label changes to "增量分析" automatically
@@ -613,7 +653,7 @@ class MainWindow(QMainWindow):
             "勾选后，每当有新的K线收盘时自动开始新一轮分析"
         )
         self._keep_analysis_checkbox.stateChanged.connect(self._on_keep_analysis_checkbox_changed)
-        ctrl_layout.addWidget(self._keep_analysis_checkbox)
+        action_layout.addWidget(self._keep_analysis_checkbox)
 
         # Reset persisted keep_analysis flag so future restarts also start unchecked
         if _settings is not None:
@@ -628,14 +668,14 @@ class MainWindow(QMainWindow):
             "恢复 K 线实时刷新；最右侧未收盘 K 线为浅色空心 K 线，不参与 AI 分析"
         )
         self._resume_chart_btn.clicked.connect(self._on_resume_chart_refresh)
-        ctrl_layout.addWidget(self._resume_chart_btn)
+        action_layout.addWidget(self._resume_chart_btn)
 
         self._fit_chart_btn = QPushButton("恢复图表")
         self._fit_chart_btn.setToolTip(
             "自动调整图表缩放，将 K 线和价格线适配到可视区域"
         )
         self._fit_chart_btn.clicked.connect(self._on_fit_chart)
-        ctrl_layout.addWidget(self._fit_chart_btn)
+        action_layout.addWidget(self._fit_chart_btn)
 
         self._eastmoney_market_panel_toggle = QPushButton("隐藏盘口/成交")
         self._eastmoney_market_panel_toggle.setCheckable(True)
@@ -647,17 +687,37 @@ class MainWindow(QMainWindow):
         self._eastmoney_market_panel_toggle.toggled.connect(
             self._on_eastmoney_market_panel_toggled
         )
-        ctrl_layout.addWidget(self._eastmoney_market_panel_toggle)
+        action_layout.addWidget(self._eastmoney_market_panel_toggle)
 
         self._decision_badge = QLabel("")
         self._decision_badge.setObjectName("mutedLabel")
-        ctrl_layout.addWidget(self._decision_badge)
+        self._decision_badge.setMinimumWidth(0)
+        action_layout.addWidget(self._decision_badge)
 
         self._ai_mode_label = QLabel("")
         self._ai_mode_label.setObjectName("mutedLabel")
-        ctrl_layout.addWidget(self._ai_mode_label)
+        self._ai_mode_label.setMinimumWidth(0)
+        self._ai_mode_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        action_layout.addWidget(self._ai_mode_label, stretch=1)
+        self._action_control_widgets = (
+            self._fetch_data_btn,
+            self._wait_close_checkbox,
+            self._wait_close_countdown_label,
+            self._submit_btn,
+            self._keep_analysis_checkbox,
+            self._resume_chart_btn,
+            self._fit_chart_btn,
+            self._eastmoney_market_panel_toggle,
+            self._decision_badge,
+            self._ai_mode_label,
+        )
+        self._controls_compact = True
 
         outer_layout.addLayout(ctrl_layout)
+        outer_layout.addLayout(action_layout)
 
         self._api_key_alert_label = QLabel(
             "未配置 API Key：请点击左上角「AI 模型」按钮，在设置中填写 API Key 后才能进行 AI 分析。"
@@ -763,6 +823,144 @@ class MainWindow(QMainWindow):
         if bus is None:
             return
         bus.status.connect(self._on_status_update)
+
+    def _screen_available_size(self, screen: Any = None) -> tuple[int, int]:
+        """Return current screen available size in Qt logical pixels."""
+        target = screen or self.screen()
+        if target is None:
+            return (1440, 900)
+        geometry = target.availableGeometry()
+        return (geometry.width(), geometry.height())
+
+    def _apply_responsive_dimensions(self, screen: Any = None) -> None:
+        """Scale minimum component widths for the active screen."""
+        available_width, _ = self._screen_available_size(screen)
+        scale = _ui_width_scale(available_width)
+
+        def scaled(preferred: int, floor: int) -> int:
+            return max(floor, round(preferred * scale))
+
+        control_widths = (
+            (self._data_source_combo, 108, 84),
+            (self._tv_exchange_combo, 96, 78),
+            (self._variety_combo, 120, 92),
+            (self._symbol_combo, 110, 88),
+            (self._tf_combo, 60, 52),
+            (self._eastmoney_date_start, 116, 84),
+            (self._eastmoney_date_end, 116, 84),
+        )
+        for widget, preferred, floor in control_widths:
+            widget.setFixedWidth(scaled(preferred, floor))
+            # Combo/date contents can otherwise force minimumSizeHint() back to
+            # their full text.  A screen-scaled fixed slot keeps QBoxLayout from
+            # assigning overlapping geometries when space is tight.
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+
+        fixed_widths = (
+            (self._fetch_data_btn, 90, 76),
+            (self._wait_close_checkbox, 192, 120),
+            (self._wait_close_countdown_label, 100, 68),
+            (self._submit_btn, 100, 84),
+            (self._incremental_submit_btn, 100, 84),
+            (self._keep_analysis_checkbox, 96, 76),
+            (self._resume_chart_btn, 86, 70),
+            (self._fit_chart_btn, 80, 66),
+            (self._eastmoney_market_panel_toggle, 112, 92),
+        )
+        for widget, preferred, floor in fixed_widths:
+            widget.setFixedWidth(scaled(preferred, floor))
+            widget.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+
+        self._eastmoney_order_book_panel.setMinimumWidth(scaled(270, 210))
+        self._eastmoney_order_book_panel.setMaximumWidth(scaled(340, 280))
+        self._ai_sidebar.setMinimumWidth(scaled(400, 300))
+
+        # These labels change while an analysis is running.  Ignoring their
+        # textual size hint prevents a status/model string from growing the
+        # top-level window beyond the monitor width.
+        for label in (self._decision_badge, self._ai_mode_label):
+            label.setMinimumWidth(0)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Preferred,
+            )
+
+        self._arrange_control_rows(available_width)
+        self.centralWidget().layout().invalidate()
+
+    def _set_action_controls_compact(self, compact: bool) -> None:
+        """Move action widgets between one-row and two-row toolbar layouts."""
+        if compact == self._controls_compact:
+            return
+        source = (
+            self._primary_controls_layout
+            if self._controls_compact is False
+            else self._action_controls_layout
+        )
+        target = (
+            self._action_controls_layout
+            if compact
+            else self._primary_controls_layout
+        )
+        for widget in self._action_control_widgets:
+            source.removeWidget(widget)
+            stretch = 1 if widget is self._ai_mode_label else 0
+            target.addWidget(widget, stretch=stretch)
+        self._controls_compact = compact
+        source.invalidate()
+        target.invalidate()
+
+    def _arrange_control_rows(self, available_width: int) -> None:
+        """Use one row whenever its actual minimum width fits the screen."""
+        self._set_action_controls_compact(False)
+        self._primary_controls_layout.activate()
+        margins = self.centralWidget().layout().contentsMargins()
+        required = (
+            self._primary_controls_layout.minimumSize().width()
+            + margins.left()
+            + margins.right()
+            + 16
+        )
+        if required > available_width:
+            self._set_action_controls_compact(True)
+
+    def _fit_window_to_screen(self, screen: Any = None, *, initial: bool = False) -> None:
+        """Keep a normal (non-maximised) window inside the active screen."""
+        available_width, available_height = self._screen_available_size(screen)
+        target_width = _fit_dimension_to_screen(
+            available_width,
+            preferred=1440,
+            floor=960,
+        )
+        target_height = _fit_dimension_to_screen(
+            available_height,
+            preferred=900,
+            floor=640,
+        )
+        minimum_hint = self.minimumSizeHint()
+        target_width = min(available_width, max(target_width, minimum_hint.width()))
+        target_height = min(available_height, max(target_height, minimum_hint.height()))
+        if self.isMaximized() or self.isFullScreen():
+            return
+        if initial:
+            self.resize(target_width, target_height)
+            return
+        if self.width() > available_width or self.height() > available_height:
+            self.resize(
+                min(self.width(), target_width),
+                min(self.height(), target_height),
+            )
+
+    def _on_screen_changed(self, screen: Any) -> None:
+        """Re-apply responsive dimensions after moving between monitors."""
+        self._apply_responsive_dimensions(screen)
+        QTimer.singleShot(0, lambda: self._fit_window_to_screen(screen))
 
     def _start_refresh_loop(self) -> None:
         """Start the RefreshLoop only when the data source is connected."""
@@ -1064,6 +1262,8 @@ class MainWindow(QMainWindow):
         ):
             if widget is not None:
                 widget.setEnabled(visible and checked)
+        if hasattr(self, "_action_control_widgets"):
+            QTimer.singleShot(0, self._apply_responsive_dimensions)
 
     def _on_eastmoney_date_filter_toggled(self, _checked: bool) -> None:
         self._sync_eastmoney_date_filter_visibility()
@@ -1140,6 +1340,8 @@ class MainWindow(QMainWindow):
             if w is not None:
                 w.setVisible(visible)
                 w.setEnabled(visible)
+        if hasattr(self, "_action_control_widgets"):
+            QTimer.singleShot(0, self._apply_responsive_dimensions)
 
     def _force_tv_exchange_auto(self) -> None:
         """Force TradingView exchange UI to «auto» (empty string)."""
@@ -3633,7 +3835,12 @@ class MainWindow(QMainWindow):
         stage = exc_info.get("stage", "")
         exc_type = exc_info.get("type", "")
         category = exc_info.get("category", "")
-        if exc_type == "provider_error" or category == "e":
+        if exc_type == "network_error":
+            parts.append(
+                "【说明】模型/API 网关请求失败，不属于阶段 JSON 校验错误，"
+                "ValidationSettings 自动校验重试不适用。请检查网络、模型名和网关参数后重新「提交分析」。\n"
+            )
+        elif exc_type == "provider_error" or category == "e":
             parts.append(
                 "【说明】API 提供商返回积分/额度不足（402），程序不会自动重试。"
                 "请充值 OpenClaw 积分或更换 API 后重新「提交分析」。\n"
@@ -4301,6 +4508,12 @@ class MainWindow(QMainWindow):
     def showEvent(self, event: QShowEvent | None) -> None:
         """On first show, prompt for API Key when missing."""
         super().showEvent(event)
+        if not self._screen_change_connected:
+            handle = self.windowHandle()
+            if handle is not None:
+                handle.screenChanged.connect(self._on_screen_changed)
+                self._screen_change_connected = True
+                self._apply_responsive_dimensions(handle.screen())
         if self._startup_api_key_check_done:
             return
         self._startup_api_key_check_done = True
@@ -4425,6 +4638,7 @@ class MainWindow(QMainWindow):
         settings = getattr(self._ctx, "settings", None)
         if settings is None:
             self._ai_mode_label.setText("")
+            self._ai_mode_label.setToolTip("")
             return
         p = settings.provider
         base = (p.base_url or "").lower()
@@ -4457,6 +4671,7 @@ class MainWindow(QMainWindow):
             self._ai_mode_label.setText(
                 f"模型: {p.model} · 思考={('开' if p.thinking else '关')}"
             )
+        self._ai_mode_label.setToolTip(self._ai_mode_label.text())
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

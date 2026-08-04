@@ -91,6 +91,13 @@ def test_completion_max_tokens_deepseek_cap():
     assert _completion_max_tokens(settings, extra_body={}, effort="max") == 393_216
 
 
+def test_completion_max_tokens_deepseek_proxy_cap():
+    settings = _make_settings()
+    settings.base_url = "http://distributor.example/v1"
+    settings.model = "deepseek-v4-pro"
+    assert _completion_max_tokens(settings, extra_body={}, effort="max") == 393_216
+
+
 def test_completion_max_tokens_packy_claude_cap():
     settings = _make_settings()
     settings.base_url = "https://www.packyapi.com/v1"
