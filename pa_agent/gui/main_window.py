@@ -420,13 +420,12 @@ class MainWindow(QMainWindow):
         outer_layout.setSpacing(6)
 
         # ── Responsive control bars ───────────────────────────────────────────
-        # Actions normally stay on the same row as the data selectors.  They are
-        # moved to the second row only when the measured minimum width would not
-        # fit the active screen.
+        # Keep data selectors on the first row and all fetch/analysis/chart
+        # actions on the second row at every screen width.
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setSpacing(8)
         action_layout = QHBoxLayout()
-        action_layout.setSpacing(8)
+        action_layout.setSpacing(6)
         self._primary_controls_layout = ctrl_layout
         self._action_controls_layout = action_layout
 
@@ -618,7 +617,9 @@ class MainWindow(QMainWindow):
 
         self._wait_close_countdown_label = QLabel("")
         self._wait_close_countdown_label.setObjectName("mutedLabel")
-        self._wait_close_countdown_label.setMinimumWidth(100)
+        # Stay compact while empty so the clickable controls can keep enough
+        # width to render their full labels.
+        self._wait_close_countdown_label.setMinimumWidth(0)
         action_layout.addWidget(self._wait_close_countdown_label)
 
         self._submit_btn = QPushButton("提交分析")
@@ -862,7 +863,6 @@ class MainWindow(QMainWindow):
         fixed_widths = (
             (self._fetch_data_btn, 90, 76),
             (self._wait_close_checkbox, 192, 120),
-            (self._wait_close_countdown_label, 100, 68),
             (self._submit_btn, 100, 84),
             (self._incremental_submit_btn, 100, 84),
             (self._keep_analysis_checkbox, 96, 76),
@@ -871,7 +871,10 @@ class MainWindow(QMainWindow):
             (self._eastmoney_market_panel_toggle, 112, 92),
         )
         for widget, preferred, floor in fixed_widths:
-            widget.setFixedWidth(scaled(preferred, floor))
+            width = scaled(preferred, floor)
+            if isinstance(widget, (QPushButton, QCheckBox)):
+                width = max(width, widget.sizeHint().width())
+            widget.setFixedWidth(width)
             widget.setSizePolicy(
                 QSizePolicy.Policy.Fixed,
                 QSizePolicy.Policy.Fixed,
@@ -917,18 +920,9 @@ class MainWindow(QMainWindow):
         target.invalidate()
 
     def _arrange_control_rows(self, available_width: int) -> None:
-        """Use one row whenever its actual minimum width fits the screen."""
-        self._set_action_controls_compact(False)
-        self._primary_controls_layout.activate()
-        margins = self.centralWidget().layout().contentsMargins()
-        required = (
-            self._primary_controls_layout.minimumSize().width()
-            + margins.left()
-            + margins.right()
-            + 16
-        )
-        if required > available_width:
-            self._set_action_controls_compact(True)
+        """Keep selectors and action controls on separate rows."""
+        del available_width
+        self._set_action_controls_compact(True)
 
     def _fit_window_to_screen(self, screen: Any = None, *, initial: bool = False) -> None:
         """Keep a normal (non-maximised) window inside the active screen."""

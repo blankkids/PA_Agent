@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QAbstractButton, QApplication
 
 from pa_agent.app_context import AppContext
 from pa_agent.config.settings import Settings
@@ -55,6 +55,9 @@ def test_main_window_controls_do_not_force_desktop_wide_minimum(qapp):
     assert window.centralWidget().minimumSizeHint().width() <= 1366
     _assert_visible_widgets_do_not_overlap(window._primary_controls_layout)
     _assert_visible_widgets_do_not_overlap(window._action_controls_layout)
+    for widget in window._action_control_widgets:
+        if isinstance(widget, QAbstractButton) and not widget.isHidden():
+            assert widget.width() >= widget.sizeHint().width()
 
     before = window.centralWidget().minimumSizeHint().width()
     window._ai_mode_label.setText("very-long-model-name-" * 100)
@@ -64,8 +67,10 @@ def test_main_window_controls_do_not_force_desktop_wide_minimum(qapp):
     assert window.centralWidget().minimumSizeHint().width() <= before
 
     window._arrange_control_rows(1600)
-    assert window._controls_compact is False
-    assert window._action_controls_layout.count() == 0
+    assert window._controls_compact is True
+    assert window._action_controls_layout.count() == len(window._action_control_widgets)
+    assert window._primary_controls_layout.indexOf(window._fetch_data_btn) == -1
+    assert window._action_controls_layout.indexOf(window._fetch_data_btn) >= 0
     window.close()
 
 
