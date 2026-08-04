@@ -769,7 +769,7 @@ class MainWindow(QMainWindow):
 
         self._chart_widget = ChartWidget()
         self._chart_widget.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
         )
         self._apply_chart_display_settings()
         workbench.addWidget(self._chart_widget)
@@ -779,9 +779,15 @@ class MainWindow(QMainWindow):
         self._eastmoney_order_book_panel = EastMoneyOrderBookPanel()
         self._eastmoney_order_book_panel.setMinimumWidth(270)
         self._eastmoney_order_book_panel.setMaximumWidth(340)
+        self._eastmoney_order_book_panel.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         workbench.addWidget(self._eastmoney_order_book_panel)
 
         self._ai_sidebar.setMinimumWidth(400)
+        self._ai_sidebar.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
+        )
         workbench.addWidget(self._ai_sidebar)
 
         workbench.setStretchFactor(0, 3)

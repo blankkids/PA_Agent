@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 
 import pytest
-from PyQt6.QtWidgets import QAbstractButton, QApplication
+from PyQt6.QtWidgets import QAbstractButton, QApplication, QSizePolicy
 
 from pa_agent.app_context import AppContext
 from pa_agent.config.settings import Settings
@@ -83,4 +83,20 @@ def test_eastmoney_date_controls_fit_common_desktop_width(qapp):
 
     assert not window._eastmoney_date_filter_checkbox.isHidden()
     assert window.centralWidget().minimumSizeHint().width() <= 800
+    window.close()
+
+
+def test_workbench_panels_can_shrink_inside_maximized_viewport(qapp):
+    window = MainWindow(AppContext(settings=Settings()))
+
+    panels = (
+        window._chart_widget,
+        window._eastmoney_order_book_panel,
+        window._ai_sidebar,
+    )
+    for panel in panels:
+        assert panel.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Ignored
+
+    assert window._workbench_splitter.minimumSizeHint().height() < 100
+    assert window.centralWidget().minimumSizeHint().height() <= 600
     window.close()
