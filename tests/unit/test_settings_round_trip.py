@@ -144,3 +144,20 @@ def test_migrate_legacy_feishu_json(tmp_path):
     assert loaded.feishu.app_id == "cli_legacy"
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["feishu"]["webhook_url"] == "https://example.com/legacy-hook"
+
+
+def test_max_output_tokens_round_trip(tmp_path):
+    """save → load preserves provider.max_output_tokens."""
+    p = tmp_path / "settings.json"
+    original = Settings()
+    original.provider.max_output_tokens = 131072
+    save_settings(original, p)
+    loaded = load_settings(p)
+    assert loaded.provider.max_output_tokens == 131072
+
+
+def test_max_output_tokens_default_is_zero(tmp_path):
+    """新增字段默认 0(自动),不改变既有默认行为。"""
+    p = tmp_path / "settings.json"
+    s = load_settings(p)
+    assert s.provider.max_output_tokens == 0

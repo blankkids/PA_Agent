@@ -20,6 +20,9 @@ class AIProviderSettings(BaseModel):
     thinking: bool = True
     reasoning_effort: Literal["low", "medium", "high", "max"] = "high"
     context_window: int = 2_000_000
+    #: 单次 completion 的 max_tokens 上限。0 = 按 provider/模型自动选择;>0 = 强制覆盖。
+    #: 用于某些中转网关对 max_tokens 有硬上限却不会自动钳制时(如 one-api/new-api)。
+    max_output_tokens: int = Field(default=0, ge=0)
 
 
 class PromptSettings(BaseModel):
