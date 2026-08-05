@@ -8,13 +8,13 @@ Tasks 14.2 + 14.5:
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 
-from pa_agent.data.datetime_ts import format_epoch_for_display
 from pa_agent.gui.widgets.candle_item import CandleItem
 from pa_agent.gui.widgets.overlay_lines import OverlayLines
 from pa_agent.gui.widgets.seq_label_item import SeqLabelItem
@@ -34,6 +34,25 @@ _Y_TOP_EXTRA_RATIO = 0.04
 _FIT_VISIBLE_BARS = 20
 _AXIS_RESIZE_MIN_WIDTH = 40
 _AXIS_RESIZE_EDGE_PX = 8
+
+
+def _format_bar_time_local(ts_ms: float, *, short: bool = True) -> str:
+    """Format a bar-open timestamp in the host's *local* timezone for display.
+
+    All data sources store ``ts_open`` as a real UTC epoch (MT5 returns UTC
+    seconds; A-share sources ``tz_localize("Asia/Shanghai")`` before converting).
+    The previous display path formatted that epoch as-is (UTC), which made
+    A-share bars show their session times 8 h early (09:30 → 01:30). Rendering
+    in the local timezone restores the actual 09:30-15:00 session on screen.
+
+    Only the chart display (axis ticks + hover) is affected; ``ts_open`` itself,
+    bar-close detection, incremental analysis, and AI prompt labels are unchanged.
+    """
+    sec = float(ts_ms)
+    if sec > 1e12:  # ms → s
+        sec /= 1000.0
+    fmt = "%Y-%m-%d %H:%M" if short else "%Y-%m-%d %H:%M:%S"
+    return datetime.fromtimestamp(sec).strftime(fmt)
 
 
 class DateTimeAxisItem(pg.AxisItem):
@@ -76,10 +95,7 @@ class DateTimeAxisItem(pg.AxisItem):
             ):
                 labels.append("")
                 continue
-            text = format_epoch_for_display(
-                self._timestamps_ms[index],
-                short=True,
-            )
+            text = _format_bar_time_local(self._timestamps_ms[index])
             labels.append(text[:10] if daily_or_higher else text[5:16])
         return labels
 
@@ -556,7 +572,7 @@ class ChartWidget(pg.PlotWidget):
     def _bar_detail_parts(self, bar: "KlineBar") -> tuple[str, str]:
         """Build rich chart details and a compact footer summary for *bar*."""
         timeframe = self._latest_frame.timeframe if self._latest_frame is not None else ""
-        time_text = format_epoch_for_display(bar.ts_open, short=True)
+        time_text = _format_bar_time_local(bar.ts_open)
         if timeframe in {"1d", "1w", "1M"}:
             time_text = time_text[:10]
 
