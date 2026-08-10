@@ -1006,20 +1006,6 @@ class PromptAssembler:
         if not bid_items and not ask_items and not trade_items:
             return ""
 
-        def _item(items: list, index: int) -> tuple[str, str]:
-            if index >= len(items) or not isinstance(items[index], dict):
-                return "—", "—"
-            level = items[index]
-            try:
-                price = f"{float(level.get('price')):.4f}".rstrip("0").rstrip(".")
-            except (TypeError, ValueError):
-                price = "—"
-            try:
-                volume = str(max(0, int(level.get("volume_lots"))))
-            except (TypeError, ValueError):
-                volume = "—"
-            return price, volume
-
         lines: list[str] = [
             "## 东方财富实时盘口（分析提交时快照）",
             "",
@@ -1032,26 +1018,8 @@ class PromptAssembler:
             ),
         ]
         if bid_items or ask_items:
-            lines.extend(
-                [
-                    (
-                        f"买盘合计：{context.get('bid_total_lots', 0)}手；"
-                        f"卖盘合计：{context.get('ask_total_lots', 0)}手；"
-                        f"委比：{context.get('order_imbalance_pct', 0)}%"
-                    ),
-                    "",
-                    "档位 | 买价 | 买量(手) | 卖价 | 卖量(手)",
-                    "-----+------+----------+------+----------",
-                ]
-            )
-            depth = min(10, max(len(bid_items), len(ask_items)))
-            for index in range(depth):
-                bid_price, bid_volume = _item(bid_items, index)
-                ask_price, ask_volume = _item(ask_items, index)
-                lines.append(
-                    f"{index + 1:<4} | {bid_price:<4} | {bid_volume:<8} | "
-                    f"{ask_price:<4} | {ask_volume}"
-                )
+            # Never expose individual bid/ask levels or their volume totals.
+            lines.append(f"委比：{context.get('order_imbalance_pct', 0)}%")
 
         if trade_items:
             shown_trades = trade_items[-20:]
