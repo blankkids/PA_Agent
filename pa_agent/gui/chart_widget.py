@@ -1,7 +1,7 @@
-"""ChartWidget — pyqtgraph-based K-line chart with EMA20 and overlay lines.
+"""ChartWidget — pyqtgraph-based K-line chart with trend indicators and overlays.
 
 Tasks 14.2 + 14.5:
-  - Renders N candles, EMA20 line, and sequence-number labels.
+  - Renders N candles, EMA10/20/60, BOLL20, and sequence-number labels.
   - Draws entry/TP/SL horizontal lines when order_type != "不下单".
   - 30 Hz QTimer throttles redraws so the 1 Hz data thread never blocks the UI.
 """
@@ -18,6 +18,12 @@ from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from pa_agent.gui.widgets.candle_item import CandleItem
 from pa_agent.gui.widgets.overlay_lines import OverlayLines
 from pa_agent.gui.widgets.seq_label_item import SeqLabelItem
+from pa_agent.indicators.bollinger import (
+    DEFAULT_BOLL_PERIOD,
+    DEFAULT_BOLL_STDDEV,
+    bollinger_full,
+)
+from pa_agent.indicators.ema import ema_full
 from pa_agent.util.trade_metrics import is_long_direction
 
 if TYPE_CHECKING:
@@ -26,7 +32,15 @@ if TYPE_CHECKING:
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _TIMER_INTERVAL_MS = 33  # ~30 Hz
-_EMA_COLOR = (255, 200, 0)  # amber
+_EMA_COLORS = {
+    10: (125, 211, 252),  # sky blue
+    20: (251, 191, 36),   # amber
+    60: (251, 146, 60),   # orange
+}
+_BOLL_PERIOD = DEFAULT_BOLL_PERIOD
+_BOLL_STDDEV = DEFAULT_BOLL_STDDEV
+_BOLL_MIDDLE_COLOR = (196, 181, 253)
+_BOLL_BAND_COLOR = (129, 140, 248)
 _NO_ORDER_TEXT = "不下单"
 _X_MARGIN_BARS = 0.65
 _Y_PADDING_RATIO = 0.07
@@ -34,6 +48,20 @@ _Y_TOP_EXTRA_RATIO = 0.04
 _FIT_VISIBLE_BARS = 20
 _AXIS_RESIZE_MIN_WIDTH = 40
 _AXIS_RESIZE_EDGE_PX = 8
+
+
+_bollinger_bands = bollinger_full
+
+
+def _ema_values_oldest_first(
+    frame: "KlineFrame",
+    closes_oldest_first: list[float],
+    period: int,
+) -> list[float]:
+    """Return an EMA series aligned to the chart's left-to-right x positions."""
+    if period == 20 and len(frame.indicators.ema20) == len(frame.bars):
+        return list(reversed(frame.indicators.ema20))
+    return ema_full(closes_oldest_first, period)
 
 
 def _format_bar_time_local(ts_ms: float, *, short: bool = True) -> str:
@@ -130,6 +158,11 @@ class ChartWidget(pg.PlotWidget):
         self._candle_items: list[CandleItem] = []
         self._seq_labels: list[SeqLabelItem] = []
         self._ema_line: pg.PlotDataItem | None = None
+        self._ema_lines: dict[int, pg.PlotDataItem] = {}
+        self._bollinger_lines: dict[str, pg.PlotDataItem] = {}
+        self._bollinger_fill: pg.FillBetweenItem | None = None
+        self._boll_period = _BOLL_PERIOD
+        self._boll_stddev = _BOLL_STDDEV
         self._overlay = OverlayLines()
         self._sr_items: list[pg.GraphicsItem] = []  # support/resistance level lines
         self._pending_decision: dict | None = None
@@ -183,6 +216,21 @@ class ChartWidget(pg.PlotWidget):
         self._seq_label_font_pt = point_size
         if self._latest_frame is not None:
             self._dirty = True
+
+    def set_bollinger_params(self, period: int, stddev: float) -> None:
+        """Update BOLL parameters and schedule an immediate chart redraw."""
+        period = max(2, min(500, int(period)))
+        stddev = max(0.1, min(10.0, float(stddev)))
+        if period == self._boll_period and math.isclose(stddev, self._boll_stddev):
+            return
+        self._boll_period = period
+        self._boll_stddev = stddev
+        if self._latest_frame is not None:
+            self._dirty = True
+
+    def bollinger_params(self) -> tuple[int, float]:
+        """Return the BOLL period and standard-deviation multiplier in use."""
+        return self._boll_period, self._boll_stddev
 
     def set_frame(self, frame: "KlineFrame", *, fit_view: bool = False) -> None:
         """Cache the latest KlineFrame; actual redraw happens on the timer."""
@@ -439,12 +487,10 @@ class ChartWidget(pg.PlotWidget):
         return super().viewportEvent(ev)
 
     def reset(self) -> None:
-        """Clear all chart items (candles, labels, EMA, overlay lines)."""
+        """Clear all chart items (candles, indicators, labels, and overlays)."""
         self.clear_decision_overlay()
         self._clear_candles_and_labels()
-        if self._ema_line is not None:
-            self.removeItem(self._ema_line)
-            self._ema_line = None
+        self._clear_indicator_overlays()
         self._latest_frame = None
         self._time_axis.clear_bar_times()
         self._bars_by_x = ()
@@ -466,12 +512,10 @@ class ChartWidget(pg.PlotWidget):
     # ── Internal rendering ────────────────────────────────────────────────────
 
     def _render_frame(self, frame: "KlineFrame") -> None:
-        """Rebuild all candle items, EMA line, and sequence labels."""
+        """Rebuild candles, trend indicators, and sequence labels."""
         hovered_ts = self._hover_timestamp
         self._clear_candles_and_labels()
-        if self._ema_line is not None:
-            self.removeItem(self._ema_line)
-            self._ema_line = None
+        self._clear_indicator_overlays()
         bars = frame.bars
         n = len(bars)
         if n == 0:
@@ -486,11 +530,7 @@ class ChartWidget(pg.PlotWidget):
             frame.timeframe,
         )
 
-        # bars[0] is newest (seq=1); we want x=0 for oldest, x=n-1 for newest
-        # so x_pos for bars[i] = (n - 1 - i)
-        ema_x: list[float] = []
-        ema_y: list[float] = []
-
+        # bars[0] is newest (seq=1); we want x=0 for oldest, x=n-1 for newest.
         for i, bar in enumerate(bars):
             x_pos = n - 1 - i  # oldest bar at x=0, newest at x=n-1
 
@@ -514,24 +554,7 @@ class ChartWidget(pg.PlotWidget):
                 self.addItem(seq_label)
                 self._seq_labels.append(seq_label)
 
-            # EMA20 point (skip NaN)
-            ema_val = frame.indicators.ema20[i]
-            if not math.isnan(ema_val):
-                ema_x.append(float(x_pos))
-                ema_y.append(ema_val)
-
-        # EMA20 line (slightly dimmed through forming bar)
-        if ema_x:
-            newest_forming = len(bars) > 0 and not bars[0].closed
-            ema_color: tuple[int, ...] = _EMA_COLOR
-            if newest_forming:
-                ema_color = (255, 200, 0, 140)
-            self._ema_line = pg.PlotDataItem(
-                x=np.array(ema_x),
-                y=np.array(ema_y),
-                pen=pg.mkPen(color=ema_color, width=1),
-            )
-            self.addItem(self._ema_line)
+        self._render_indicator_overlays(frame)
 
         self._update_direction_marker()
 
@@ -553,6 +576,94 @@ class ChartWidget(pg.PlotWidget):
                 self._hide_bar_details()
             else:
                 self._show_bar_details(restored_index, self._bars_by_x[restored_index].close)
+
+    @staticmethod
+    def _curve_for_values(
+        values: list[float],
+        *,
+        color: tuple[int, ...],
+        width: float = 1.0,
+        style: Qt.PenStyle = Qt.PenStyle.SolidLine,
+    ) -> pg.PlotDataItem | None:
+        y_values = np.asarray(values, dtype=float)
+        valid = np.isfinite(y_values)
+        if not valid.any():
+            return None
+        x_values = np.arange(len(values), dtype=float)
+        curve = pg.PlotDataItem(
+            x=x_values[valid],
+            y=y_values[valid],
+            pen=pg.mkPen(color=color, width=width, style=style),
+        )
+        curve.setZValue(10)
+        return curve
+
+    def _render_indicator_overlays(self, frame: "KlineFrame") -> None:
+        """Draw EMA10/20/60 plus the BOLL20 channel over the candles."""
+        bars = frame.bars
+        closes = [bar.close for bar in reversed(bars)]
+        newest_forming = bool(bars and not bars[0].closed)
+        alpha = 150 if newest_forming else 255
+
+        for period, base_color in _EMA_COLORS.items():
+            values = _ema_values_oldest_first(frame, closes, period)
+            color = (*base_color, alpha)
+            curve = self._curve_for_values(values, color=color, width=1.2)
+            if curve is None:
+                continue
+            self.addItem(curve)
+            self._ema_lines[period] = curve
+
+        # Retain the original attribute for callers that inspect the EMA20 item.
+        self._ema_line = self._ema_lines.get(20)
+
+        middle, upper, lower = _bollinger_bands(
+            closes,
+            period=self._boll_period,
+            stddev=self._boll_stddev,
+        )
+        boll_specs = {
+            "middle": (middle, _BOLL_MIDDLE_COLOR, Qt.PenStyle.DotLine),
+            "upper": (upper, _BOLL_BAND_COLOR, Qt.PenStyle.DashLine),
+            "lower": (lower, _BOLL_BAND_COLOR, Qt.PenStyle.DashLine),
+        }
+        for name, (values, base_color, style) in boll_specs.items():
+            curve = self._curve_for_values(
+                values,
+                color=(*base_color, alpha),
+                width=1.0,
+                style=style,
+            )
+            if curve is not None:
+                self._bollinger_lines[name] = curve
+
+        upper_curve = self._bollinger_lines.get("upper")
+        lower_curve = self._bollinger_lines.get("lower")
+        if upper_curve is not None and lower_curve is not None:
+            fill_alpha = 24 if not newest_forming else 16
+            self._bollinger_fill = pg.FillBetweenItem(
+                upper_curve,
+                lower_curve,
+                brush=pg.mkBrush(*_BOLL_BAND_COLOR, fill_alpha),
+            )
+            self._bollinger_fill.setZValue(-20)
+            self.addItem(self._bollinger_fill)
+
+        for curve in self._bollinger_lines.values():
+            self.addItem(curve)
+
+    def _clear_indicator_overlays(self) -> None:
+        """Remove every moving-average and Bollinger graphics item."""
+        if self._bollinger_fill is not None:
+            self.removeItem(self._bollinger_fill)
+            self._bollinger_fill = None
+        for curve in self._bollinger_lines.values():
+            self.removeItem(curve)
+        self._bollinger_lines.clear()
+        for curve in self._ema_lines.values():
+            self.removeItem(curve)
+        self._ema_lines.clear()
+        self._ema_line = None
 
     # ── K-line hover / selection details ─────────────────────────────────────
 
@@ -703,15 +814,32 @@ class ChartWidget(pg.PlotWidget):
         n = len(bars)
         visible_count = min(_FIT_VISIBLE_BARS, n)
         visible_bars = bars[:visible_count]
-        visible_ema = frame.indicators.ema20[:visible_count]
+        closes_oldest_first = [bar.close for bar in reversed(bars)]
+        boll_middle, boll_upper, boll_lower = _bollinger_bands(
+            closes_oldest_first,
+            period=self._boll_period,
+            stddev=self._boll_stddev,
+        )
+        visible_indicator_values = [
+            *boll_middle[-visible_count:],
+            *boll_upper[-visible_count:],
+            *boll_lower[-visible_count:],
+        ]
+        for period in _EMA_COLORS:
+            ema_values = _ema_values_oldest_first(
+                frame,
+                closes_oldest_first,
+                period,
+            )
+            visible_indicator_values.extend(ema_values[-visible_count:])
 
         y_min = min(b.low for b in visible_bars)
         y_max = max(b.high for b in visible_bars)
 
-        for ema_val in visible_ema:
-            if not math.isnan(ema_val):
-                y_min = min(y_min, ema_val)
-                y_max = max(y_max, ema_val)
+        for indicator_value in visible_indicator_values:
+            if not math.isnan(indicator_value):
+                y_min = min(y_min, indicator_value)
+                y_max = max(y_max, indicator_value)
 
         decision = self._pending_decision
         if decision is not None:

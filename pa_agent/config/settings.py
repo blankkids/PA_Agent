@@ -35,6 +35,9 @@ class PromptSettings(BaseModel):
     experience_max_chars_per_entry: int = Field(default=400, ge=100, le=4000)
     #: Inject pattern判定表 + 速查 brief into Stage 1 user prompt (reduces missed tags).
     stage1_inject_pattern_briefs: bool = True
+    #: BOLL parameters shared by the chart and all AI-analysis prompts.
+    boll_period: int = Field(default=20, ge=2, le=500)
+    boll_stddev: float = Field(default=2.0, ge=0.1, le=10.0)
 
 
 class ValidationSettings(BaseModel):

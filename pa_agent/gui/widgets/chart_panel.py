@@ -11,7 +11,7 @@ class ChartPanel(QWidget):
     Layout (vertical):
     - titlebar (symbol / timeframe / meta / status pill)
     - chart_widget (``ChartWidget``, stretch=1)
-    - legend (EMA lines + up/down colour key)
+    - legend (EMA/BOLL lines + up/down colour key)
     - footer (usage hints + live price read-out)
     """
 
@@ -78,11 +78,12 @@ class ChartPanel(QWidget):
         legend_layout.setSpacing(16)
 
         for text, color in [
-            ("EMA10（天蓝线）", "#7dd3fc"),
-            ("EMA20（金黄线）", "#fbbf24"),
-            ("EMA60（橙红线）", "#fb923c"),
-            ("涨（绿色）", "#22c55e"),
-            ("跌（红色）", "#ef4444"),
+            ("EMA10", "#7dd3fc"),
+            ("EMA20", "#fbbf24"),
+            ("EMA60", "#fb923c"),
+            ("BOLL20", "#818cf8"),
+            ("涨", "#22c55e"),
+            ("跌", "#ef4444"),
         ]:
             lbl = QLabel(text)
             lbl.setStyleSheet(

@@ -6,6 +6,7 @@ import math
 import pytest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 
 from pa_agent.ai.prompt_assembler import PromptAssembler
@@ -162,6 +163,28 @@ def test_stage1_user_prompt_contains_required_fields(assembler: PromptAssembler)
     assert "程序结构辅助特征" in user
     assert "doji" in user
     assert "更高时间框架" not in user
+
+
+def test_chart_indicators_and_custom_bollinger_params_are_sent_to_both_stages(
+    assembler: PromptAssembler,
+):
+    assembler._prompt_settings = SimpleNamespace(
+        boll_period=3,
+        boll_stddev=1.5,
+        stage1_inject_pattern_briefs=True,
+        stage2_load_full_strategy_library=False,
+    )
+    frame = _make_frame(80)
+
+    stage1_user = assembler.build_stage1(frame)[1]["content"]
+    stage2_user = assembler.build_stage2(frame, {}, [], [])[1]["content"]
+
+    for prompt in (stage1_user, stage2_user):
+        assert "图表技术指标（与当前图表参数一致，提交给 AI" in prompt
+        assert "EMA10 / EMA20 / EMA60；BOLL(N=3, K=1.5)" in prompt
+        assert "BOLL中轨 | BOLL上轨 | BOLL下轨 | 收盘位置" in prompt
+        newest_row = next(line for line in prompt.splitlines() if line.startswith("K1 |"))
+        assert "N/A" not in newest_row
 
 
 def test_eastmoney_order_book_levels_and_totals_are_not_sent_to_model_stages(

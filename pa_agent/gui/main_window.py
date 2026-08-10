@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateEdit,
+    QDoubleSpinBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -720,6 +721,40 @@ class MainWindow(QMainWindow):
         outer_layout.addLayout(ctrl_layout)
         outer_layout.addLayout(action_layout)
 
+        # ── Chart indicator controls ─────────────────────────────────────────
+        indicator_layout = QHBoxLayout()
+        indicator_layout.setSpacing(8)
+        self._indicator_controls_layout = indicator_layout
+        indicator_layout.addWidget(QLabel("图表指标：EMA10 / EMA20 / EMA60 · BOLL"))
+        indicator_layout.addStretch(1)
+
+        indicator_layout.addWidget(QLabel("BOLL周期 N:"))
+        self._boll_period_spin = QSpinBox()
+        self._boll_period_spin.setRange(2, 500)
+        self._boll_period_spin.setValue(
+            int(getattr(getattr(_settings, "prompt", None), "boll_period", 20))
+        )
+        self._boll_period_spin.setMaximumWidth(80)
+        self._boll_period_spin.setToolTip(
+            "布林带移动平均周期；图表与提交给 AI 的指标表使用同一参数"
+        )
+        indicator_layout.addWidget(self._boll_period_spin)
+
+        indicator_layout.addWidget(QLabel("标准差 K:"))
+        self._boll_stddev_spin = QDoubleSpinBox()
+        self._boll_stddev_spin.setRange(0.1, 10.0)
+        self._boll_stddev_spin.setDecimals(2)
+        self._boll_stddev_spin.setSingleStep(0.1)
+        self._boll_stddev_spin.setValue(
+            float(getattr(getattr(_settings, "prompt", None), "boll_stddev", 2.0))
+        )
+        self._boll_stddev_spin.setMaximumWidth(80)
+        self._boll_stddev_spin.setToolTip(
+            "布林带上下轨标准差倍数；图表与提交给 AI 的指标表使用同一参数"
+        )
+        indicator_layout.addWidget(self._boll_stddev_spin)
+        outer_layout.addLayout(indicator_layout)
+
         self._api_key_alert_label = QLabel(
             "未配置 API Key：请点击左上角「AI 模型」按钮，在设置中填写 API Key 后才能进行 AI 分析。"
         )
@@ -768,6 +803,16 @@ class MainWindow(QMainWindow):
         self._workbench_splitter = workbench
 
         self._chart_widget = ChartWidget()
+        self._chart_widget.set_bollinger_params(
+            self._boll_period_spin.value(),
+            self._boll_stddev_spin.value(),
+        )
+        self._boll_period_spin.valueChanged.connect(
+            self._on_bollinger_params_changed
+        )
+        self._boll_stddev_spin.valueChanged.connect(
+            self._on_bollinger_params_changed
+        )
         self._chart_widget.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
         )
@@ -4633,6 +4678,32 @@ class MainWindow(QMainWindow):
             flow_viz.refit_view()
             flow_viz.schedule_refit_view()
 
+    def _on_bollinger_params_changed(self, _value: object = None) -> None:
+        """Apply and persist the BOLL parameters shared by chart and prompts."""
+        period_spin = getattr(self, "_boll_period_spin", None)
+        stddev_spin = getattr(self, "_boll_stddev_spin", None)
+        if period_spin is None or stddev_spin is None:
+            return
+        period = int(period_spin.value())
+        stddev = float(stddev_spin.value())
+
+        chart = getattr(self, "_chart_widget", None)
+        if chart is not None:
+            chart.set_bollinger_params(period, stddev)
+
+        settings = getattr(self._ctx, "settings", None)
+        prompt_settings = getattr(settings, "prompt", None)
+        if prompt_settings is None:
+            return
+        prompt_settings.boll_period = period
+        prompt_settings.boll_stddev = stddev
+        try:
+            from pa_agent.config.settings import save_settings
+
+            save_settings(settings)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Failed to persist BOLL parameters: %s", exc)
+
     def _update_ai_mode_label(self) -> None:
         """Show current thinking / reasoning_effort / model in the toolbar."""
         settings = getattr(self._ctx, "settings", None)
@@ -4699,6 +4770,11 @@ class MainWindow(QMainWindow):
             return
         reason = self._submit_block_reason()
         can = reason is None
+        boll_controls_enabled = not self._analysis_in_progress
+        for control_name in ("_boll_period_spin", "_boll_stddev_spin"):
+            control = getattr(self, control_name, None)
+            if control is not None:
+                control.setEnabled(boll_controls_enabled)
         self._submit_btn.setEnabled(can)
         if hasattr(self, "_incremental_submit_btn"):
             self._incremental_submit_btn.setEnabled(can)
