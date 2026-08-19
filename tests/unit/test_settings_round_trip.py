@@ -18,7 +18,9 @@ def test_defaults(tmp_path):
     assert s.provider.reasoning_effort == "high"
     assert s.provider.context_window == 2_000_000
     assert s.general.analysis_bar_count == 100
-    assert s.general.last_symbol == "XAUUSDm"
+    # 默认数据源为东方财富(A股), 默认品种为平安银行 000001
+    assert s.general.last_data_source == "eastmoney"
+    assert s.general.last_symbol == "000001"
     assert s.general.last_timeframe == "15m"
     assert s.general.decision_stance == "balanced"
     assert s.general.decision_flow_auto_play is True
@@ -35,8 +37,8 @@ def test_round_trip(tmp_path):
     save_settings(original, p)
     loaded = load_settings(p)
     assert loaded.provider.api_key == "sk-test-1234"
-    # Crypto symbols migrate to gold defaults on load
-    assert loaded.general.last_symbol == "XAUUSDm"
+    # 默认数据源为 eastmoney, 非A股代码 BTCUSDT 迁移为 A 股默认品种 000001
+    assert loaded.general.last_symbol == "000001"
     assert loaded.provider.model == original.provider.model
 
 

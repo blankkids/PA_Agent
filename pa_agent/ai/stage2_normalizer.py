@@ -1735,62 +1735,9 @@ def normalize_stage2(
     if isinstance(pred_c, dict):
         _normalize_next_cycle_prediction(pred_c, stage1_json=stage1_json)
 
-    # ── Hard guard: align decision direction with next cycle direction ──
-    # User rule:
-    # - "下一周期偏空就不要给出做多的决策"
-    # - Symmetric: 下一周期偏多时也不要给出做空的决策
-    try:
-        pred_c = out.get("next_cycle_prediction")
-        decision = out.get("decision")
-        if isinstance(pred_c, dict) and isinstance(decision, dict):
-            next_dir = str(pred_c.get("direction") or "").strip().lower()
-            order_dir = str(decision.get("order_direction") or "").strip()
-            order_type = str(decision.get("order_type") or "").strip()
-            is_long = ("多" in order_dir) or (order_dir.lower() in ("long", "buy", "bullish"))
-            is_short = ("空" in order_dir) or (order_dir.lower() in ("short", "sell", "bearish"))
-            block_long = next_dir == "bearish" and is_long
-            block_short = next_dir == "bullish" and is_short
-            if (block_long or block_short) and order_type not in ("", "不下单"):
-                decision = dict(decision)
-                decision["order_type"] = "不下单"
-                for key in (
-                    "order_direction",
-                    "entry_price",
-                    "stop_loss_price",
-                    "take_profit_price",
-                    "take_profit_price_2",
-                    "entry_rule",
-                    "entry_basis_bar",
-                    "entry_basis_extreme",
-                    "estimated_win_rate",
-                ):
-                    decision[key] = None
-
-                existing = str(decision.get("reasoning") or "")
-                if block_long:
-                    prefix = (
-                        "【程序守卫】next_cycle_prediction.direction=bearish：禁止做多；改为不下单。 "
-                    )
-                else:
-                    prefix = (
-                        "【程序守卫】next_cycle_prediction.direction=bullish：禁止做空；改为不下单。 "
-                    )
-                decision["reasoning"] = (prefix + existing)[:DECISION_REASONING_MAX_LEN]
-
-                terminal = dict(out.get("terminal") or {})
-                terminal["outcome"] = "wait"
-                terminal["node_id"] = "prediction_guard"
-                terminal["label"] = (
-                    "周期预测守卫：下一周期偏空，禁止做多"
-                    if block_long
-                    else "周期预测守卫：下一周期偏多，禁止做空"
-                )
-
-                out = dict(out)
-                out["decision"] = decision
-                out["terminal"] = terminal
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("prediction direction guard failed: %s", exc)
+    # next_cycle_prediction is diagnostic sidebar only — do NOT hard-block orders.
+    # Empirics: directional edge from cycle forecasts is thin (~1–2pt); hard bans
+    # remain Always-In / direction / climax rules elsewhere.
 
     if kline_frame is not None and stage1_json:
         try:

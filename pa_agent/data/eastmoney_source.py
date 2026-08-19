@@ -8,10 +8,12 @@ from typing import Any
 
 from pa_agent.data.ashare_common import (
     PRESET_SYMBOLS as _PRESET_SYMBOLS,
+    ashare_after_close_today as _ashare_after_close_today,
     ashare_head_bar_live as _ashare_head_bar_live,
     ashare_session_open as _ashare_session_open,
     ashare_trading_day as _ashare_trading_day,
     cn_now as _cn_now,
+    ensure_today_closed_daily_bar,
     ensure_today_forming_daily_bar,
     index_symbol_for_api as _index_symbol_for_api,
     is_index_symbol,
@@ -411,6 +413,10 @@ class EastMoneySource(DataSource):
         elif live_range and _ashare_session_open():
             self._apply_spot_to_forming(rows_asc)
 
+        # 收盘后（15:00之后）若数据源未返回当天日线，用盘口数据补一根已收盘K线
+        if self._timeframe == "1d" and _ashare_after_close_today():
+            self._ensure_today_closed_bar(rows_asc)
+
         rows_newest = list(reversed(rows_asc[-fetch_n:]))
         for i, row in enumerate(rows_newest):
             row["closed"] = not (
@@ -638,3 +644,48 @@ class EastMoneySource(DataSource):
         from pa_agent.data.ashare_common import apply_session_quote_to_forming_row
 
         apply_session_quote_to_forming_row(last, price=price, daily=False)
+
+    def _ensure_today_closed_bar(self, rows_asc: list[dict[str, Any]]) -> None:
+        """收盘后若数据源（Baostock等）未包含当日日线，从东方财富盘口补一根已收盘K线。
+
+        Baostock 数据通常在收盘后有数小时延迟，导致 15:00-18:00 之间
+        分析时最后一根 K 线停在昨天。此方法通过东方财富五档/现价接口获取
+        当日完整 OHLCV 并补充为已收盘 K 线。
+        """
+        from pa_agent.data.ashare_common import bar_trade_date
+
+        if not rows_asc:
+            return
+        today = _cn_now().date()
+        # 如果最后一根 bar 已经是今天的，无需补充
+        if bar_trade_date(int(rows_asc[-1]["ts_open"])) >= today:
+            return
+
+        # 尝试从东方财富盘口获取当日 OHLCV
+        from pa_agent.data.eastmoney_client import fetch_stock_order_book
+
+        book = None
+        if not is_index_symbol(self._symbol):
+            book = fetch_stock_order_book(self._symbol)
+
+        if book is not None and book.price > 0:
+            ensure_today_closed_daily_bar(
+                rows_asc,
+                symbol=self._symbol,
+                session_open=float(book.open) if book.open else 0.0,
+                session_high=float(book.high) if book.high else 0.0,
+                session_low=float(book.low) if book.low else 0.0,
+                session_close=float(book.price),
+                session_volume_lots=float(book.volume) if book.volume else 0.0,
+                session_amount=float(book.amount) if book.amount else 0.0,
+            )
+            return
+
+        # 指数无盘口五档，尝试现价
+        spot = fetch_spot_price(self._symbol)
+        if spot and spot > 0:
+            ensure_today_closed_daily_bar(
+                rows_asc,
+                symbol=self._symbol,
+                session_close=float(spot),
+            )

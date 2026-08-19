@@ -63,7 +63,7 @@ def test_chat_does_not_send_forbidden_params():
 
 
 def test_chat_extra_body_thinking_enabled():
-    """extra_body must contain thinking.type=enabled and reasoning_effort."""
+    """DeepSeek v4+ uses thinking.type=adaptive + output_config.effort."""
     settings = _make_settings()
     settings.base_url = "https://api.deepseek.com"
     settings.model = "deepseek-v4-pro"
@@ -80,7 +80,8 @@ def test_chat_extra_body_thinking_enabled():
 
     call_kwargs = mock_openai.return_value.chat.completions.create.call_args
     kwargs = call_kwargs.kwargs
-    assert kwargs["extra_body"]["thinking"]["type"] == "enabled"
+    assert kwargs["extra_body"]["thinking"]["type"] == "adaptive"
+    assert kwargs["extra_body"]["output_config"]["effort"] == "max"
     assert kwargs["reasoning_effort"] == "max"
 
 

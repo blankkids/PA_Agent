@@ -1,23 +1,17 @@
-"""Unit tests for DecisionPanel next_bar_prediction rendering (T18)."""
+"""Unit tests for DecisionPanel (order + diagnosis; prediction lives on FutureTrendPanel)."""
 from __future__ import annotations
 
 import sys
 import time
 
 import pytest
-from hypothesis import given, settings as h_settings
-from hypothesis import strategies as st
-
 from PyQt6.QtWidgets import QApplication
 
 from pa_agent.gui.decision_panel import DecisionPanel
 
 
-# ── QApplication fixture ─────────────────────────────────────────────────────
-
 @pytest.fixture(scope="module")
 def qapp():
-    """Shared QApplication for all tests in this module."""
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
@@ -32,10 +26,7 @@ def panel(qapp):
     return p
 
 
-# ── Helper ───────────────────────────────────────────────────────────────────
-
 def _valid_no_order() -> dict:
-    """Minimal valid stage2 decision with 不下单."""
     return {
         "decision": {
             "order_type": "不下单",
@@ -181,76 +172,17 @@ def test_panel_bearish_range_trend_shows_biased_sideways(panel: DecisionPanel):
     assert "#f85149" in panel._trend_label.styleSheet()
 
 
-def test_panel_clear_hides_group(panel: DecisionPanel):
-    """clear() must hide prediction group and clear text."""
+def test_panel_no_order_renders(panel: DecisionPanel):
     data = _valid_no_order()
-    data["next_bar_prediction"] = {
-        "direction": "bullish",
-        "probabilities": {"bullish": 70, "bearish": 20, "neutral": 10},
-        "reasoning": "test",
-        "unpredictable": False,
-        "features_used": ["stage1_diagnosis"],
-    }
-    inner = {**data["decision"], "next_bar_prediction": data["next_bar_prediction"]}
-    panel.set_decision(inner, diagnosis_summary=data.get("diagnosis_summary"))
-    assert panel._prediction_group.isVisible()
-
-    panel.clear()
-    assert not panel._prediction_group.isVisible()
-    assert panel._prediction_reasoning_edit.toPlainText() == ""
+    panel.set_decision(data["decision"], diagnosis_summary=data.get("diagnosis_summary"))
+    assert "不下单" in panel._conclusion_label.text()
 
 
 def test_panel_render_performance(panel: DecisionPanel):
     """set_decision must complete in ≤ 50ms (NFR1.3)."""
     data = _valid_no_order()
-    data["next_bar_prediction"] = {
-        "direction": "bullish",
-        "probabilities": {"bullish": 70, "bearish": 20, "neutral": 10},
-        "reasoning": "test reasoning " * 30,
-        "unpredictable": False,
-        "features_used": ["stage1_diagnosis"],
-    }
-    inner = {**data["decision"], "next_bar_prediction": data["next_bar_prediction"]}
     start = time.perf_counter()
     for _ in range(10):
-        panel.set_decision(inner, diagnosis_summary=data.get("diagnosis_summary"))
+        panel.set_decision(data["decision"], diagnosis_summary=data.get("diagnosis_summary"))
     elapsed = (time.perf_counter() - start) / 10
     assert elapsed < 0.05, f"set_decision took {elapsed*1000:.1f}ms per call"
-
-
-# ── PBT: robust against garbage ──────────────────────────────────────────────
-
-_garbage_prediction = st.fixed_dictionaries(
-    {},
-    optional={
-        "direction": st.one_of(st.none(), st.text(max_size=20), st.integers()),
-        "probabilities": st.one_of(
-            st.none(),
-            st.integers(),
-            st.text(max_size=10),
-            st.dictionaries(st.text(max_size=10), st.one_of(st.integers(), st.text(), st.none())),
-        ),
-        "reasoning": st.one_of(st.none(), st.text(max_size=100), st.integers(), st.lists(st.integers())),
-        "unpredictable": st.one_of(st.booleans(), st.none(), st.integers(), st.text(max_size=5)),
-        "features_used": st.one_of(st.none(), st.integers(), st.lists(st.one_of(st.text(), st.integers()))),
-    },
-)
-
-
-@given(pred=_garbage_prediction)
-@h_settings(max_examples=100, deadline=None)
-def test_panel_robust_against_garbage(pred: dict):
-    """Any garbage next_bar_prediction must not raise an exception (P10)."""
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-    p = DecisionPanel()
-    p.show()
-    app.processEvents()
-    data = _valid_no_order()
-    inner = {**data["decision"], "next_bar_prediction": pred}
-    try:
-        p.set_decision(inner, diagnosis_summary=data.get("diagnosis_summary"))
-    except Exception:
-        # If it raises, the GUI code needs defensive fixes
-        pass

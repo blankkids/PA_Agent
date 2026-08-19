@@ -2,10 +2,12 @@
 
 ---
 
-## 0. 核心法则：80-20 与惯性
+## 0. 核心法则：突破分层与惯性
 
-- **区间中约 80% 突破尝试失败**——默认不相信突破；顺 direction 边界优于追突破。
+- **区间突破须分层**：影线试探 / 未站稳收盘 → 多数失败（约 **70–80%** 量级）；**禁止**把所有「刺破」当成同一概率。
+- **存活突破**（收盘站稳且未快速收回）后，约 **60%** 可达区间高度 MM——条件概率，不是「任意突破六成能成」。
 - **趋势中约 80% 反转尝试失败**——顺势突破（趋势恢复）更可信。
+- 程序特征 `breakout_quality`：`wick_probe` / `close_breakout` / `failed` / `testing` / `surviving`；仅 `surviving` 时 `mm_as_tp_ok=true`。
 - 改变惯性需要：**强突破棒 + 跟随 +（可选）缺口**（PA Agent 不依赖成交量）。
 
 `detected_patterns` 须与叙事一致：假突破 → `breakout_failure`；回测突破位 → `breakout_test`；失败的失败 → `breakout_pullback`。

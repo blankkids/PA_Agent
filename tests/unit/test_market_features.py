@@ -73,6 +73,57 @@ def test_breakout_failure_detected() -> None:
     failed = [e for e in features.breakout_events if e.event == "failed"]
     assert failed, "expected a failed upside breakout reclaim"
     assert failed[-1].level_kind == "range_high"
+    assert features.breakout_quality == "failed"
+    assert features.mm_as_tp_ok is False
+
+
+def test_surviving_breakout_enables_mm_flag() -> None:
+    # Build a range then close above and stay above for several bars (newest=seq1).
+    older = [
+        KlineBar(seq=i, ts_open=float(20 - i), open=99.0, high=100.0, low=98.0, close=99.0, volume=1)
+        for i in range(12, 6, -1)
+    ]
+    # breakout around seq 6, then hold above
+    hold = [
+        KlineBar(seq=6, ts_open=6.0, open=100.2, high=101.5, low=100.0, close=101.2, volume=1),
+        KlineBar(seq=5, ts_open=5.0, open=101.0, high=101.8, low=100.5, close=101.4, volume=1),
+        KlineBar(seq=4, ts_open=4.0, open=101.2, high=102.0, low=100.8, close=101.6, volume=1),
+        KlineBar(seq=3, ts_open=3.0, open=101.4, high=102.2, low=101.0, close=101.8, volume=1),
+        KlineBar(seq=2, ts_open=2.0, open=101.5, high=102.5, low=101.1, close=102.0, volume=1),
+        KlineBar(seq=1, ts_open=1.0, open=101.8, high=102.8, low=101.4, close=102.3, volume=1),
+    ]
+    bars = tuple(hold + older)
+    features = compute_simple_market_features(_frame(*bars), lookback=12)
+    assert features.breakout_quality in ("surviving", "close_breakout", "testing")
+    text = render_simple_market_features(features)
+    assert "突破质量" in text
+    assert "尖峰余波" in text
+
+
+def test_scale_conflict_and_render_keys() -> None:
+    # Recent rising, older falling → conflict when enough bars
+    bars = []
+    # seq 1..20 recent up (newest first in frame)
+    for i in range(1, 21):
+        px = 120 - i * 0.5  # newer higher
+        bars.append(KlineBar(seq=i, ts_open=float(i), open=px - 0.2, high=px + 0.5, low=px - 0.5, close=px, volume=1))
+    # seq 41..80 background: make older window net down when indexed as bars[40:]
+    for i in range(21, 81):
+        # older bars have higher prices so bg net (bg[0]-bg[-1]) is negative when newest-first
+        px = 100 + (i - 21) * 0.4
+        bars.append(KlineBar(seq=i, ts_open=float(i), open=px, high=px + 0.3, low=px - 0.3, close=px, volume=1))
+    features = compute_simple_market_features(_frame(*tuple(bars)), lookback=80)
+    assert features.scale_conflict is True
+    pf_keys = {
+        "breakout_quality",
+        "mm_as_tp_ok",
+        "spike_aftermath_hint",
+        "scale_conflict",
+    }
+    from pa_agent.ai.market_features import build_program_features_dict
+
+    d = build_program_features_dict(_frame(*tuple(bars)))
+    assert pf_keys <= set(d)
 
 
 def test_measured_move_range_projection() -> None:

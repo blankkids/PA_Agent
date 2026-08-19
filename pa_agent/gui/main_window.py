@@ -1,7 +1,8 @@
-﻿"""Main application window for PA Agent."""
+"""Main application window for PA Agent."""
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Any
 
 from PyQt6.QtCore import QDate, QThread, QTimer, pyqtSignal, QObject
@@ -381,6 +382,10 @@ class MainWindow(QMainWindow):
 
         # ── Menu bar ─── 顶层直接触发按钮 + 演示模式下拉 ────────────────────
         menu_bar: QMenuBar = self.menuBar()  # type: ignore[assignment]
+        # macOS 原生菜单栏只认 QMenu 下拉菜单，不认顶层 QAction，
+        # 强制禁用原生菜单栏以保持跨平台一致的按钮式菜单栏体验。
+        if sys.platform == "darwin":
+            menu_bar.setNativeMenuBar(False)
 
         # 1. AI 模型设置 — 点击直接弹对话框（无下拉）
         _ai_model_action = QAction("AI 模型设置", self)
@@ -431,20 +436,24 @@ class MainWindow(QMainWindow):
         self._action_controls_layout = action_layout
 
         _settings = getattr(self._ctx, "settings", None)
-        _last_symbol = "XAUUSDm"
+        _last_symbol = "000001"
         _last_tf = "15m"
         if _settings is not None:
-            _last_symbol = getattr(_settings.general, "last_symbol", "XAUUSDm") or "XAUUSDm"
+            _last_symbol = getattr(_settings.general, "last_symbol", "000001") or "000001"
             _last_tf = getattr(_settings.general, "last_timeframe", "15m") or "15m"
 
         # Data source
         from pa_agent.data.factory import DATA_SOURCE_CHOICES, normalize_data_source_kind
 
-        _last_ds = "mt5"
+        _last_ds = "eastmoney"
         if _settings is not None:
             _last_ds = normalize_data_source_kind(
-                getattr(_settings.general, "last_data_source", "mt5")
+                getattr(_settings.general, "last_data_source", "eastmoney")
             )
+        # 如果上次保存的数据源不在 UI 可选列表中, 强制回退东方财富(A股)
+        _ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
+        if _last_ds not in _ui_kinds:
+            _last_ds = "eastmoney"
         self._active_data_source_kind = _last_ds
 
         ctrl_layout.addWidget(QLabel("数据来源:"))

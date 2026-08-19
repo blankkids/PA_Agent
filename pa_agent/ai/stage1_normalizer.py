@@ -741,4 +741,57 @@ def normalize_stage1(
         except Exception as exc:  # noqa: BLE001
             logger.warning("refresh_stage1_support_resistance failed: %s", exc)
 
+    _apply_empiric_risk_caps(out)
     return out
+
+
+_SCALE_CONFLICT_CONF_CAP = 55
+
+
+def _apply_empiric_risk_caps(out: dict[str, Any]) -> None:
+    """Cap confidence / annotate risks from program empiric features (in-place)."""
+    pf = out.get("program_features") if isinstance(out.get("program_features"), dict) else {}
+    tc = out.get("trend_context") if isinstance(out.get("trend_context"), dict) else {}
+    scale_conflict = bool(pf.get("scale_conflict")) or bool(tc.get("conflict"))
+    spike_hint = str(pf.get("spike_aftermath_hint") or "none")
+    bo_q = str(pf.get("breakout_quality") or "none")
+    mm_ok = bool(pf.get("mm_as_tp_ok"))
+
+    notes: list[str] = []
+    if scale_conflict:
+        try:
+            conf = int(out.get("diagnosis_confidence") or 50)
+        except (TypeError, ValueError):
+            conf = 50
+        if conf > _SCALE_CONFLICT_CONF_CAP:
+            out["diagnosis_confidence"] = _SCALE_CONFLICT_CONF_CAP
+            notes.append(
+                f"多尺度方向冲突：diagnosis_confidence 已封顶 {_SCALE_CONFLICT_CONF_CAP}"
+            )
+        else:
+            notes.append("多尺度方向冲突：执行跟近期窗口，长程仅作风险参考")
+
+    if spike_hint == "sticky_reversal_risk":
+        notes.append("尖峰起点失守且仍在错边（粘性反转风险）—仅诊断，禁止逆势三价")
+        patterns = list(out.get("detected_patterns") or [])
+        if "reversal_attempt" not in patterns:
+            patterns.append("reversal_attempt")
+            out["detected_patterns"] = patterns
+    elif spike_hint == "pullback":
+        notes.append("尖峰后正常回撤≠反转，默认按通道/旗形处理")
+    elif spike_hint == "origin_break_risk":
+        notes.append("尖峰起点受威胁—观察是否站回，勿抢先当反转下单")
+
+    if bo_q in ("wick_probe", "close_breakout", "failed"):
+        notes.append(
+            f"突破质量={bo_q}：不宜把区间高度 MM 当主目标"
+            + ("（非存活突破）" if not mm_ok else "")
+        )
+    elif bo_q == "surviving" and mm_ok:
+        notes.append("存活突破：区间高度 MM 可作 TP2 候选")
+
+    if not notes:
+        return
+    existing = str(out.get("risk_warning") or "").strip()
+    joined = "；".join(notes)
+    out["risk_warning"] = f"{existing}；{joined}" if existing else joined

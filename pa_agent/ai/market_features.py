@@ -24,6 +24,11 @@ _BARBWIRE_WIDTH_ATR_MAX = 3.0
 _BARBWIRE_SCORE_THRESHOLD = 0.6
 _BREAKOUT_RECLAIM_BARS = 5
 _BREAKOUT_TEST_TOLERANCE_ATR = 0.15
+_SURVIVING_MIN_BARS = 5
+_SPIKE_LOOKBACK = 16
+_SPIKE_MIN_RUN = 3
+_SCALE_RECENT = 20
+_SCALE_BG_START = 40
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,7 @@ class BreakoutEvent:
     trigger_seq: int
     bar_range: str
     note: str
+    attempt_type: str = "close"  # wick | close
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,12 @@ class SimpleMarketFeatures:
     invalidation_long: float | None
     invalidation_short: float | None
     measured_moves: tuple[MeasuredMoveCandidate, ...]
+    # Empiric-aligned structure quality (program-computed)
+    breakout_quality: str  # none|wick_probe|close_breakout|failed|testing|surviving
+    breakout_attempt_type: str | None  # wick|close|None
+    mm_as_tp_ok: bool  # True only when breakout_quality == surviving
+    spike_aftermath_hint: str  # none|continued|pullback|origin_break_risk|sticky_reversal_risk
+    scale_conflict: bool  # recent vs background net direction disagree
 
 
 def compute_simple_market_features(
@@ -156,6 +168,17 @@ def compute_simple_market_features(
         close,
         lookback=min(lookback, n),
     )
+    breakout_quality, breakout_attempt_type = _classify_breakout_quality(
+        window,
+        breakout_events,
+        range_high,
+        range_low,
+        atr_val,
+    )
+    mm_as_tp_ok = breakout_quality == "surviving"
+    # Only keep aggressive range-MM emphasis when surviving; still list candidates for context
+    spike_aftermath_hint = _spike_aftermath_hint(window, atr_val)
+    scale_conflict = _scale_conflict(window)
 
     return SimpleMarketFeatures(
         lookback_bars=min(lookback, n),
@@ -181,6 +204,11 @@ def compute_simple_market_features(
         invalidation_long=invalidation_long,
         invalidation_short=invalidation_short,
         measured_moves=tuple(measured_moves),
+        breakout_quality=breakout_quality,
+        breakout_attempt_type=breakout_attempt_type,
+        mm_as_tp_ok=mm_as_tp_ok,
+        spike_aftermath_hint=spike_aftermath_hint,
+        scale_conflict=scale_conflict,
     )
 
 
@@ -236,6 +264,20 @@ def render_simple_market_features(features: SimpleMarketFeatures) -> str:
         lines.append(f"- 自最近极点回撤：{features.pullback_depth_atr}×ATR{bars_part}")
 
     lines.extend(["", "### 突破 / 收回 / 回测"])
+    quality_zh = {
+        "none": "无显著突破",
+        "wick_probe": "影线试探（未收盘站稳）",
+        "close_breakout": "收盘突破（尚未确认存活）",
+        "failed": "突破失败/已收回",
+        "testing": "突破回测中",
+        "surviving": "存活突破（站稳，MM 可用）",
+    }.get(features.breakout_quality, features.breakout_quality)
+    lines.append(f"- **突破质量**：**{features.breakout_quality}** → {quality_zh}")
+    if features.breakout_attempt_type:
+        lines.append(f"- 尝试类型：{features.breakout_attempt_type}")
+    lines.append(
+        f"- **区间高度 MM 作 TP2**：{'允许（存活突破）' if features.mm_as_tp_ok else '不宜作为主依据（非存活突破）'}"
+    )
     if features.breakout_events:
         for ev in features.breakout_events[:4]:
             kind_zh = {
@@ -247,12 +289,26 @@ def render_simple_market_features(features: SimpleMarketFeatures) -> str:
                 "failed": "突破失败/收回",
                 "test": "突破回测",
             }.get(ev.event, ev.event)
+            at = getattr(ev, "attempt_type", "close")
             lines.append(
                 f"- {event_zh} {kind_zh} **{ev.level_price}** @ K{ev.trigger_seq}"
-                f"（{ev.bar_range}）{ev.note}"
+                f"（{ev.bar_range}，{at}）{ev.note}"
             )
     else:
         lines.append("- 近窗口内无显著区间突破/收回事件")
+
+    lines.extend(["", "### 尖峰余波 / 多尺度"])
+    spike_zh = {
+        "none": "近端无典型尖峰余波标签",
+        "continued": "尖峰仍在延续",
+        "pullback": "尖峰后正常回撤（≠反转）",
+        "origin_break_risk": "已威胁/刺破尖峰起点（观察是否粘性）",
+        "sticky_reversal_risk": "尖峰起点失守且仍在错边（粘性反转风险）",
+    }.get(features.spike_aftermath_hint, features.spike_aftermath_hint)
+    lines.append(f"- 尖峰余波提示：**{features.spike_aftermath_hint}** → {spike_zh}")
+    lines.append(
+        f"- 多尺度方向冲突：**{'是（须压低 diagnosis_confidence，执行跟短窗）' if features.scale_conflict else '否'}**"
+    )
 
     hc = features.hl_count
     lines.extend(["", "### H/L 计数触发（突破前一棒极点）"])
@@ -289,6 +345,8 @@ def render_simple_market_features(features: SimpleMarketFeatures) -> str:
     lines.append("")
     lines.append(
         "说明：以上为程序客观计算；`detected_patterns` / 三价仍须你结合 playbook 综合判断。"
+        "突破质量分层：影线试探失败率高；仅 surviving 时把区间高度 MM 作主要 TP2。"
+        "尖峰余波：pullback≠反转；仅 sticky_reversal_risk 才提高反转诊断权重（仍禁止逆势三价）。"
     )
     return "\n".join(lines)
 
@@ -303,6 +361,11 @@ def build_program_features_dict(frame: KlineFrame) -> dict[str, Any]:
         "price_position": features.price_position,
         "zone": features.zone,
         "swing_structure": features.swing_structure,
+        "breakout_quality": features.breakout_quality,
+        "breakout_attempt_type": features.breakout_attempt_type,
+        "mm_as_tp_ok": features.mm_as_tp_ok,
+        "spike_aftermath_hint": features.spike_aftermath_hint,
+        "scale_conflict": features.scale_conflict,
     }
 
 
@@ -367,6 +430,174 @@ def _dedupe_breakout_events(events: list[BreakoutEvent]) -> list[BreakoutEvent]:
     return sorted(by_level.values(), key=lambda e: e.trigger_seq)[:_MAX_BREAKOUT_EVENTS]
 
 
+def _classify_breakout_quality(
+    bars: tuple[KlineBar, ...],
+    events: tuple[BreakoutEvent, ...] | list[BreakoutEvent],
+    range_high: float | None,
+    range_low: float | None,
+    atr: float | None,
+) -> tuple[str, str | None]:
+    """Map recent BO events → quality ladder used for MM gating."""
+    if not bars:
+        return "none", None
+
+    # Newest-first bars (seq ascending)
+    close0 = float(bars[0].close)
+    high0 = float(bars[0].high)
+    low0 = float(bars[0].low)
+    tick_slack = (atr or 0.0) * 0.05
+
+    # Wick probe on newest bar without close beyond envelope
+    if range_high is not None and high0 > range_high + tick_slack and close0 <= range_high:
+        # If we also have a failed/close event, prefer those below
+        wick_only = True
+    elif range_low is not None and low0 < range_low - tick_slack and close0 >= range_low:
+        wick_only = True
+    else:
+        wick_only = False
+
+    if not events:
+        return ("wick_probe", "wick") if wick_only else ("none", None)
+
+    # Prefer most recent event (smallest seq)
+    ordered = sorted(events, key=lambda e: e.trigger_seq)
+    latest = ordered[0]
+    attempt = getattr(latest, "attempt_type", "close") or "close"
+
+    if latest.event == "failed":
+        return "failed", attempt
+    if latest.event == "test":
+        return "surviving", attempt
+    if latest.event == "breakout":
+        # Surviving if enough bars since breakout without a later failed on same level
+        age = latest.trigger_seq  # seq of breakout bar (1=newest)
+        later_fail = any(
+            e.event == "failed"
+            and e.level_kind == latest.level_kind
+            and e.trigger_seq < latest.trigger_seq
+            for e in events
+        )
+        if later_fail:
+            return "failed", attempt
+        # still outside?
+        outside = False
+        if latest.level_kind == "range_high" and close0 > latest.level_price:
+            outside = True
+        if latest.level_kind == "range_low" and close0 < latest.level_price:
+            outside = True
+        if not outside:
+            return "failed", attempt
+        if age >= _SURVIVING_MIN_BARS:
+            return "surviving", attempt
+        return "close_breakout", attempt
+
+    return ("wick_probe", "wick") if wick_only else ("none", None)
+
+
+def _spike_aftermath_hint(bars: tuple[KlineBar, ...], atr: float | None) -> str:
+    """Heuristic spike aftermath label on newest window (not a full Brooks classifier)."""
+    n = min(len(bars), _SPIKE_LOOKBACK)
+    if n < _SPIKE_MIN_RUN + 2 or not atr or atr <= 0:
+        return "none"
+
+    window = bars[:n]
+    # Scan for a recent same-direction strong run (chronological oldest→newest within window)
+    chrono = list(reversed(window))
+    best = None  # (start_i, end_i, direction)
+    i = 0
+    while i < len(chrono):
+        o, h, l, c = float(chrono[i].open), float(chrono[i].high), float(chrono[i].low), float(chrono[i].close)
+        body = abs(c - o)
+        d = 1 if c > o else (-1 if c < o else 0)
+        if d == 0 or body < 0.5 * atr:
+            i += 1
+            continue
+        run = [i]
+        j = i + 1
+        while j < len(chrono):
+            oj, hj, lj, cj = (
+                float(chrono[j].open),
+                float(chrono[j].high),
+                float(chrono[j].low),
+                float(chrono[j].close),
+            )
+            dj = 1 if cj > oj else (-1 if cj < oj else 0)
+            if dj != d or abs(cj - oj) < 0.35 * atr:
+                break
+            run.append(j)
+            j += 1
+        if len(run) >= _SPIKE_MIN_RUN:
+            best = (run[0], run[-1], d)
+        i = j if j > i + 1 else i + 1
+
+    if best is None:
+        return "none"
+
+    start_i, end_i, d = best
+    # origin: low of first bar for up spike, high for down
+    if d > 0:
+        origin = float(chrono[start_i].low)
+        spike_end = float(chrono[end_i].close)
+        move = max(spike_end - float(chrono[start_i].open), atr)
+    else:
+        origin = float(chrono[start_i].high)
+        spike_end = float(chrono[end_i].close)
+        move = max(float(chrono[start_i].open) - spike_end, atr)
+
+    # bars after spike end
+    after = chrono[end_i + 1 :]
+    if not after:
+        return "continued"
+
+    # continued if more same-dir strong bars immediately
+    cont = 0
+    for bar in after[:4]:
+        o, c = float(bar.open), float(bar.close)
+        dj = 1 if c > o else (-1 if c < o else 0)
+        if dj == d and abs(c - o) >= 0.45 * atr:
+            cont += 1
+        else:
+            break
+    if cont >= 2:
+        return "continued"
+
+    last = after[-1]
+    last_c = float(last.close)
+    if d > 0:
+        mae = max(0.0, spike_end - min(float(b.low) for b in after))
+        origin_break_close = any(float(b.close) < origin for b in after)
+        still_wrong = last_c < origin
+    else:
+        mae = max(0.0, max(float(b.high) for b in after) - spike_end)
+        origin_break_close = any(float(b.close) > origin for b in after)
+        still_wrong = last_c > origin
+
+    if origin_break_close and still_wrong and mae >= 0.85 * move:
+        return "sticky_reversal_risk"
+    if origin_break_close or mae >= 1.0 * move:
+        return "origin_break_risk"
+    if mae >= 0.25 * move:
+        return "pullback"
+    return "continued"
+
+
+def _scale_conflict(bars: tuple[KlineBar, ...]) -> bool:
+    """True when recent net direction disagrees with older background net direction."""
+    n = len(bars)
+    if n < _SCALE_BG_START + 10:
+        return False
+    recent = bars[:_SCALE_RECENT]
+    bg = bars[_SCALE_BG_START : min(n, _SCALE_BG_START + 40)]
+    if len(bg) < 10:
+        return False
+    # bars newest-first: recent[0] newest; net = oldest_close → newest_close in slice
+    r_net = float(recent[0].close) - float(recent[-1].close)
+    b_net = float(bg[0].close) - float(bg[-1].close)
+    if abs(r_net) < 1e-12 or abs(b_net) < 1e-12:
+        return False
+    return (r_net > 0) != (b_net > 0)
+
+
 def _empty_features(lookback: int) -> SimpleMarketFeatures:
     empty_hl = HLCountState(0, 0, None, None, "none", "none", "不适用")
     return SimpleMarketFeatures(
@@ -393,6 +624,11 @@ def _empty_features(lookback: int) -> SimpleMarketFeatures:
         invalidation_long=None,
         invalidation_short=None,
         measured_moves=(),
+        breakout_quality="none",
+        breakout_attempt_type=None,
+        mm_as_tp_ok=False,
+        spike_aftermath_hint="none",
+        scale_conflict=False,
     )
 
 

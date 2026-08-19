@@ -703,15 +703,16 @@ def test_signal_bar_bumped_when_same_seq_as_entry() -> None:
             "entry_basis_bar": "K3",
             "entry_basis_extreme": "low",
             "entry_rule": "test",
-            "take_profit_price": 3.20,
-            "take_profit_price_2": 3.00,
-            "stop_loss_price": 3.6,
+            # Keep RR / trader equation passing after stop-cap widening.
+            "take_profit_price": 3.00,
+            "take_profit_price_2": 2.80,
+            "stop_loss_price": 3.55,
             "reasoning": "t",
             "diagnosis_confidence": 50,
             "diagnosis_confidence_reasoning": "t",
-            "trade_confidence": 50,
+            "trade_confidence": 60,
             "trade_confidence_reasoning": "t",
-            "estimated_win_rate": 50,
+            "estimated_win_rate": 70,
             "estimated_win_rate_reasoning": "t",
             "key_factors": [],
             "watch_points": [],
@@ -736,6 +737,7 @@ def test_signal_bar_bumped_when_same_seq_as_entry() -> None:
         "terminal": {"node_id": "0", "outcome": "trade", "label": "t"},
     }
     out = normalize_stage2(obj)
+    assert out["decision"]["order_type"] == "突破单"
     assert out["bar_analysis"]["signal_bar"]["bar"] == "K2"
 
 
@@ -832,7 +834,8 @@ def test_repair_next_bar_yinxian_singular_probability() -> None:
     assert nb["probabilities"]["bearish"] == 60
 
 
-def test_prediction_guard_forbids_long_when_next_cycle_bearish() -> None:
+def test_next_cycle_prediction_does_not_hard_block_long() -> None:
+    """next_cycle is sidebar only — must not force 不下单 against stage1 direction."""
     obj = {
         "decision": {
             "order_type": "限价单",
@@ -855,7 +858,7 @@ def test_prediction_guard_forbids_long_when_next_cycle_bearish() -> None:
         },
         "diagnosis_summary": {
             "cycle_position": "trending_tr",
-            "direction": "neutral",
+            "direction": "bullish",
             "key_signals": [],
         },
         "decision_trace": [],
@@ -879,20 +882,20 @@ def test_prediction_guard_forbids_long_when_next_cycle_bearish() -> None:
         },
     }
     out = normalize_stage2(obj)
-    assert out["decision"]["order_type"] == "不下单"
-    assert out["terminal"]["outcome"] == "wait"
-    assert "禁止做多" in (out["decision"].get("reasoning") or "")
+    assert out["decision"]["order_type"] == "限价单"
+    assert out["decision"]["order_direction"] == "做多"
+    assert out["terminal"]["outcome"] == "trade"
 
 
-def test_prediction_guard_forbids_short_when_next_cycle_bullish() -> None:
+def test_next_cycle_prediction_does_not_hard_block_short() -> None:
     obj = {
         "decision": {
             "order_type": "限价单",
             "order_direction": "做空",
             "entry_price": 4022.486,
-            "take_profit_price": 4015.365,
-            "take_profit_price_2": 4009.473,
-            "stop_loss_price": 4034.234,
+            "take_profit_price": 4010.0,
+            "take_profit_price_2": 4000.0,
+            "stop_loss_price": 4028.0,
             "reasoning": "test",
             "diagnosis_confidence": 64,
             "diagnosis_confidence_reasoning": "t",
@@ -907,7 +910,7 @@ def test_prediction_guard_forbids_short_when_next_cycle_bullish() -> None:
         },
         "diagnosis_summary": {
             "cycle_position": "trending_tr",
-            "direction": "neutral",
+            "direction": "bearish",
             "key_signals": [],
         },
         "decision_trace": [],
@@ -931,9 +934,9 @@ def test_prediction_guard_forbids_short_when_next_cycle_bullish() -> None:
         },
     }
     out = normalize_stage2(obj)
-    assert out["decision"]["order_type"] == "不下单"
-    assert out["terminal"]["outcome"] == "wait"
-    assert "禁止做空" in (out["decision"].get("reasoning") or "")
+    assert out["decision"]["order_type"] == "限价单"
+    assert out["decision"]["order_direction"] == "做空"
+    assert out["terminal"]["outcome"] == "trade"
 
 
 def test_validator_injects_next_bar_when_feature_disabled() -> None:

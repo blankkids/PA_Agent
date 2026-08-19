@@ -89,35 +89,15 @@ def test_prompt_token_delta_within_budget(tmp_path: Path):
 # ── NFR1.3: Panel render time ────────────────────────────────────────────────
 
 def test_panel_render_time():
-    """set_decision with prediction must complete in ≤ 50ms."""
-    from pa_agent.gui.decision_panel import DecisionPanel
+    """set_prediction with next_bar data must complete in ≤ 50ms."""
+    from pa_agent.gui.future_trend_panel import FutureTrendPanel
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication(sys.argv)
-    panel = DecisionPanel()
+    panel = FutureTrendPanel()
 
     decision = {
-        "decision": {
-            "order_type": "不下单",
-            "order_direction": None,
-            "entry_price": None,
-            "take_profit_price": None,
-            "stop_loss_price": None,
-            "reasoning": "test",
-            "diagnosis_confidence": 40,
-            "diagnosis_confidence_reasoning": "t",
-            "trade_confidence": 30,
-            "trade_confidence_reasoning": "t",
-            "estimated_win_rate": None,
-            "estimated_win_rate_reasoning": "t",
-            "key_factors": [],
-            "watch_points": [],
-            "risk_assessment": "t",
-            "invalidation_condition": "t",
-        },
-        "diagnosis_summary": {"cycle_position": "normal_channel", "direction": "bullish", "key_signals": []},
-        "decision_trace": [{"node_id": "10.3", "question": "q", "answer": "否", "reason": "r", "bar_range": "K1"}],
-        "terminal": {"node_id": "10.3", "outcome": "wait", "label": "test"},
+        "order_type": "不下单",
         "next_bar_prediction": {
             "direction": "bullish",
             "probabilities": {"bullish": 70, "bearish": 20, "neutral": 10},
@@ -128,12 +108,12 @@ def test_panel_render_time():
     }
 
     # Warm up
-    panel.set_decision(decision)
+    panel.set_prediction(decision)
 
     n = 20
     start = time.perf_counter()
     for _ in range(n):
-        panel.set_decision(decision)
+        panel.set_prediction(decision)
     elapsed = (time.perf_counter() - start) / n
 
     assert elapsed < 0.05, f"Panel render took {elapsed*1000:.1f}ms, exceeds 50ms budget"

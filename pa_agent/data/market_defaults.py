@@ -474,7 +474,7 @@ def resolve_tv_gold_pair(
 
 def migrate_general_gold_defaults(general: dict) -> None:
     """In-place migration: gold symbol + valid TV exchange/symbol pair."""
-    kind = str(general.get("last_data_source", "mt5"))
+    kind = str(general.get("last_data_source", "eastmoney"))
     sym = str(general.get("last_symbol", ""))
     general["last_symbol"] = normalize_gold_symbol_for_kind(kind, sym)
     if kind == "tradingview":

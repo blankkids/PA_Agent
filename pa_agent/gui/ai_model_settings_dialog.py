@@ -35,6 +35,16 @@ from pa_agent.ai.workbuddy_connector import (
     is_openclaw_wb_model,
     should_use_workbuddy_provider,
 )
+from pa_agent.ai.trae_connector import (
+    detect_trae_cn,
+    is_openclaw_twc_model,
+    should_use_trae_cn_provider,
+)
+from pa_agent.ai.qoder_connector import (
+    detect_qoder_cn,
+    is_openclaw_qc_model,
+    should_use_qoder_cn_provider,
+)
 
 _API_KEY_HELP_URL = "https://my.feishu.cn/wiki/CUV1wUKWxiQGhekQdRvcZQQ2ncf"
 _AGENT_TUTORIAL_URL = (
@@ -145,6 +155,18 @@ class AIModelSettingsDialog(QDialog):
             if err:
                 QMessageBox.warning(self, "WorkBuddy 配置异常", err)
                 return
+        elif is_openclaw_twc_model(model) or should_use_trae_cn_provider(model, base_url):
+            p.api_key = api_key
+            err = self._apply_trae_cn_provider(preferred_model=model)
+            if err:
+                QMessageBox.warning(self, "TRAE Work CN 配置异常", err)
+                return
+        elif is_openclaw_qc_model(model) or should_use_qoder_cn_provider(model, base_url):
+            p.api_key = api_key
+            err = self._apply_qoder_cn_provider(preferred_model=model)
+            if err:
+                QMessageBox.warning(self, "Qoder CN 配置异常", err)
+                return
         elif is_openclaw_cs_model(model) or should_use_cursor_provider(model, base_url):
             # Cursor route must keep the user-provided Cursor API key (crsr_...).
             p.api_key = api_key
@@ -209,6 +231,14 @@ class AIModelSettingsDialog(QDialog):
         from pa_agent.ai.workbuddy_connector import apply_workbuddy_provider_to_settings
         return apply_workbuddy_provider_to_settings(self._settings, preferred_model=preferred_model or None)
 
+    def _apply_trae_cn_provider(self, *, preferred_model: str = "") -> str | None:
+        from pa_agent.ai.trae_connector import apply_trae_cn_provider_to_settings
+        return apply_trae_cn_provider_to_settings(self._settings, preferred_model=preferred_model or None)
+
+    def _apply_qoder_cn_provider(self, *, preferred_model: str = "") -> str | None:
+        from pa_agent.ai.qoder_connector import apply_qoder_cn_provider_to_settings
+        return apply_qoder_cn_provider_to_settings(self._settings, preferred_model=preferred_model or None)
+
     @staticmethod
     def _validate_provider_fields(model: str, base_url: str) -> str | None:
         if is_openclaw_cs_model(model) or should_use_cursor_provider(model, base_url):
@@ -217,6 +247,10 @@ class AIModelSettingsDialog(QDialog):
             return None
         if is_openclaw_wb_model(model) or should_use_workbuddy_provider(model, base_url):
             return None
+        if is_openclaw_twc_model(model) or should_use_trae_cn_provider(model, base_url):
+            return None
+        if is_openclaw_qc_model(model) or should_use_qoder_cn_provider(model, base_url):
+            return None
         if model.startswith(("http://", "https://")) and not base_url.startswith(("http://", "https://")):
             return (
                 "「模型」与「Base URL」似乎填反了：\n"
@@ -224,6 +258,8 @@ class AIModelSettingsDialog(QDialog):
                 "• 使用 QClaw 时模型填 openclaw（或 openclaw/main）\n"
                 "• 使用 Cursor 订阅时模型填 openclaw_cs\n"
                 "• 使用 WorkBuddy 时模型填 openclaw_wb\n"
+                "• 使用 TRAE Work CN 时模型填 openclaw_twc\n"
+                "• 使用 Qoder CN 时模型填 openclaw_qc\n"
                 "• Base URL 应填接口地址，如 https://api.deepseek.com"
             )
         if base_url.startswith(("http://", "https://")):
@@ -231,13 +267,31 @@ class AIModelSettingsDialog(QDialog):
         if not base_url:
             if detect_qclaw():
                 return (
-                    "请填写 Base URL，或使用 QClaw/WorkBuddy：\n"
+                    "请填写 Base URL，或使用 QClaw/WorkBuddy/TRAE Work CN/Qoder CN：\n"
                     "• 模型填 openclaw → QClaw\n"
                     "• 模型填 openclaw_cs → Cursor 订阅（经 QClaw 网关）\n"
-                    "• 模型填 openclaw_wb → WorkBuddy"
+                    "• 模型填 openclaw_wb → WorkBuddy\n"
+                    "• 模型填 openclaw_twc → TRAE Work CN\n"
+                    "• 模型填 openclaw_qc → Qoder CN"
                 )
             if detect_workbuddy():
-                return "请填写 Base URL，或使用 WorkBuddy：\n• 模型填 openclaw_wb（保存时自动配置）"
+                return (
+                    "请填写 Base URL，或使用 WorkBuddy/TRAE Work CN/Qoder CN：\n"
+                    "• 模型填 openclaw_wb → WorkBuddy\n"
+                    "• 模型填 openclaw_twc → TRAE Work CN\n"
+                    "• 模型填 openclaw_qc → Qoder CN"
+                )
+            if detect_trae_cn():
+                return (
+                    "请填写 Base URL，或使用 TRAE Work CN/Qoder CN：\n"
+                    "• 模型填 openclaw_twc → TRAE Work CN（保存时自动配置）\n"
+                    "• 模型填 openclaw_qc → Qoder CN（保存时自动配置）"
+                )
+            if detect_qoder_cn():
+                return (
+                    "请填写 Base URL，或使用 Qoder CN：\n"
+                    "• 模型填 openclaw_qc → Qoder CN（保存时自动配置）"
+                )
             return "请填写 Base URL（API 接口地址）。"
         return (
             f"Base URL 不是有效网址（当前：{base_url}）。\n"
@@ -245,7 +299,9 @@ class AIModelSettingsDialog(QDialog):
             "PackyAPI 示例：https://www.packyapi.com/v1\n"
             "QClaw：模型填 openclaw 后点保存（自动配置本地网关）\n"
             "Cursor：模型填 openclaw_cs 后点保存（经 QClaw 走 Cursor 订阅）\n"
-            "WorkBuddy：模型填 openclaw_wb 后点保存（自动配置 WorkBuddy）"
+            "WorkBuddy：模型填 openclaw_wb 后点保存（自动配置 WorkBuddy）\n"
+            "TRAE Work CN：模型填 openclaw_twc 后点保存（自动配置 TRAE Work CN）\n"
+            "Qoder CN：模型填 openclaw_qc 后点保存（自动配置 Qoder CN）"
         )
 
     def _show_unlimited_token_info(self) -> None:

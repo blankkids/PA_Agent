@@ -235,13 +235,13 @@ def test_save_full_round_trip(
 def test_demo_mode_replays_legacy_record(
     frame, pending_writer, assembler, exp_reader
 ):
-    """Legacy record without prediction must not crash DecisionPanel (R10.1)."""
-    from pa_agent.gui.decision_panel import DecisionPanel
+    """Legacy record without prediction must not crash FutureTrendPanel (R10.1)."""
+    from pa_agent.gui.future_trend_panel import FutureTrendPanel
     from PyQt6.QtWidgets import QApplication
     import sys
 
     app = QApplication.instance() or QApplication(sys.argv)
-    panel = DecisionPanel()
+    panel = FutureTrendPanel()
 
     # Legacy: no next_bar_prediction key
     legacy_s2 = json.loads(json.dumps(VALID_STAGE2))
@@ -249,8 +249,8 @@ def test_demo_mode_replays_legacy_record(
     legacy_s2.pop("next_bar_prediction", None)
 
     # Must not raise
-    panel.set_decision(legacy_s2)
-    assert not panel._prediction_group.isVisible()
+    panel.set_prediction(legacy_s2)
+    assert not panel._bar_group.isVisible()
 
 
 def test_cancel_no_prediction_required(

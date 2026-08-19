@@ -331,7 +331,9 @@ diagnosis_confidence 分档说明（全系统统一阈值 **50**）:
 - 50-69:周期位置存在歧义(如 trending_tr vs normal_channel),或长程背景与近期方向冲突(冲突不否决、不自动wait,仅降置信);需更多K线确认
 - 30-49:信号严重矛盾,周期位置难以判定,K线特征与多种状态都有部分重叠;阶段二应显著降低 trade_confidence
 - 0-29:数据不足以支撑任何诊断,或市场状态极度混乱(如极端交易区间)
+- **多尺度冲突硬顶**：当程序 `scale_conflict=true` 或 `trend_context.conflict=true` 时，`diagnosis_confidence` **不得超过 55**（程序会封顶）；执行跟近期窗口，长程只作风险参考
 - **<50 且 key_signals 为空**：阶段二强烈倾向 `order_type=不下单`（仍须经 §9–§10 完整评估，不得跳过）
+- 程序 `breakout_quality` / `mm_as_tp_ok` / `spike_aftermath_hint` 为客观辅助：仅 surviving 才主推区间 MM；pullback≠反转；sticky_reversal_risk 仅诊断
 
 **support_levels / resistance_levels 填写规则：**
 - `support_levels`：从近期 K 线结构中识别出的**当前价格下方**支撑价位，按由近到远排列，最多 3 个。每项填价格字符串（如 `"5402"` 或 `"5380-5400"` 表示区间），不识别时填空数组 `[]`。
@@ -704,10 +706,13 @@ def _build_next_cycle_prediction_instruction(*, enable_next_bar: bool) -> str:
 
 
 _NEXT_CYCLE_PREDICTION_INSTRUCTION = """\
-## 下一个市场周期预测任务（阶段二附加输出，不影响下单决策）
+## 下一个市场周期预测任务（阶段二附加输出·诊断旁注）
+
+**定位**：`next_cycle_prediction` 是**诊断旁注**，不是交易信号。实测方向边缘极薄（约 +1–2pt vs 抛硬币），
+**禁止**用其改写 `decision` / 否决顺 `direction` 的合格方案。交易门控只认阶段一方向、Always In 与硬禁令。
 
 完成 next_bar_prediction 后，必须在阶段二 JSON 顶层追加键 `next_cycle_prediction`，
-表达对当前市场周期结束后、下一个市场周期的预测：
+表达对当前市场周期结束后、下一个市场周期的**粗粒度**判断：
 
 ```json
 "next_cycle_prediction": {
@@ -723,7 +728,7 @@ _NEXT_CYCLE_PREDICTION_INSTRUCTION = """\
     "trading_range": 10,
     "extreme_tr": 4
   },
-  "reasoning": "简体中文理由，1–1500 字。须引用阶段一周期诊断、K 线结构演变特征，说明各周期概率依据。",
+  "reasoning": "简体中文。优先用三桶叙述：①延续当前结构 ②转换中/嵌套冲突 ③粘性反转风险。说明为何不是精确点预测。",
   "unpredictable": false,
   "features_used": ["stage1_diagnosis", "kline_features"]
 }
@@ -738,7 +743,7 @@ spike | micro_channel | tight_channel | normal_channel | broad_channel | trendin
 2. cycle 必须等于 probabilities 中数值最大的键；并列最大时按上方枚举的字面顺序取靠前者
    （即 spike → micro_channel → tight_channel → normal_channel → broad_channel → trending_tr → trading_range → extreme_tr）。
 3. direction 为独立的方向预测（bullish / bearish / neutral），不由 cycle argmax 强制推导；
-   表达的是预测下一个周期时市场整体偏向的方向。
+   表达的是预测下一个周期时市场整体偏向的方向——**仅供 UI/记录，不驱动下单**。
 4. reasoning 长度 1–1500 字，简体中文，仅讨论周期演变依据，不写下单价格、不写止损止盈。
 5. features_used 合法取值封闭列表（只能从下方选对应值，禁止自造字符串）：
    "stage1_diagnosis"、"kline_features"、"analysis_history"、"experience_library"、"stage2_decision"、"previous_prediction_summary"。
@@ -746,7 +751,7 @@ spike | micro_channel | tight_channel | normal_channel | broad_channel | trendin
    "kline_features" / "analysis_history" / "experience_library" / "previous_prediction_summary"。
 6. 数据不足（K 线数 < 8）、或阶段一诊断为 extreme_tr / unknown、或市场极端混乱时：
    设 unpredictable=true，cycle=null，direction=null，probabilities=null，reasoning 写明原因。
-7. 此预测**不**进入交易者方程、**不**改变 decision 中任意字段，仅作辅助参考。
+7. 此预测**不**进入交易者方程、**不**改变 decision 中任意字段，仅作辅助参考；程序亦不再用其硬拦单。
 """.strip()
 
 # txt files merged into each stage prompt (order preserved)

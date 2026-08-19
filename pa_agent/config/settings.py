@@ -13,7 +13,7 @@ class AIProviderSettings(BaseModel):
     """AI provider connection and behaviour settings."""
     model_config = ConfigDict(extra="ignore")
 
-    model: str = "openclaw_wb/deepseek-v4-flash"
+    model: str = "deepseek-v4-flash"
     base_url: str = "https://api.deepseek.com"
     api_key: str = ""
     api_key_encrypted: str = ""
@@ -68,12 +68,12 @@ class GeneralSettings(BaseModel):
     analysis_bar_count: int = Field(default=100, ge=2, le=5000)
     refresh_interval_ms: int = 1000
     context_warning_threshold_pct: float = 80.0
-    last_data_source: DataSourceKind = "mt5"
+    last_data_source: DataSourceKind = "eastmoney"
     #: A-share K-line adjust for East Money / Baostock (qfq=前复权)
     kline_adjust: Literal["qfq", "hfq", "none"] = "qfq"
     #: TradingView 交易所；空字符串 =（自动）依次探测预设列表
     last_tradingview_exchange: str = ""
-    last_symbol: str = "XAUUSDm"
+    last_symbol: str = "000001"
     last_timeframe: str = "15m"
     decision_flow_auto_play: bool = True
     decision_flow_play_seconds: int = 50
@@ -105,7 +105,7 @@ class GeneralSettings(BaseModel):
     @classmethod
     def _coerce_legacy_data_source(cls, v: object) -> object:
         if v == "yfinance":
-            return "mt5"
+            return "eastmoney"
         if v in ("adata", "a_share"):
             return "akshare"
         if v == "eastmoney":

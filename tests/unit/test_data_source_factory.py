@@ -28,6 +28,13 @@ def test_normalize_data_source_kind_hidden_sources():
     assert normalize_data_source_kind("yfinance") == "yfinance"
 
 
+def test_mt5_in_ui_choices():
+    """MT5 为默认数据源, 必须在 UI 可选列表中且排首位。"""
+    ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
+    assert "mt5" in ui_kinds
+    assert DATA_SOURCE_CHOICES[0][0] == "mt5"
+
+
 def test_ashare_sources_in_ui_choices():
     ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
     assert "akshare" in ui_kinds
@@ -61,4 +68,4 @@ def test_default_tradingview_exchange_is_auto():
 
 def test_general_settings_last_data_source_default():
     g = GeneralSettings()
-    assert g.last_data_source == "mt5"
+    assert g.last_data_source == "eastmoney"

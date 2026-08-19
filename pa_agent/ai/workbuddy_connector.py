@@ -46,9 +46,16 @@ def is_workbuddy_route(provider: Any) -> bool:
     """True when provider targets WorkBuddy / CodeBuddy copilot API."""
     from pa_agent.ai.cursor_connector import is_openclaw_cs_model
     from pa_agent.ai.qclaw_connector import is_openclaw_model
+    from pa_agent.ai.qoder_connector import is_openclaw_qc_model
+    from pa_agent.ai.trae_connector import is_openclaw_twc_model
 
     model = str(getattr(provider, "model", "") or "").strip().lower()
-    if is_openclaw_model(model) or is_openclaw_cs_model(model):
+    if (
+        is_openclaw_model(model)
+        or is_openclaw_cs_model(model)
+        or is_openclaw_twc_model(model)
+        or is_openclaw_qc_model(model)
+    ):
         return False
     if is_openclaw_wb_model(model):
         return True
@@ -136,10 +143,17 @@ def should_use_workbuddy_provider(
     """True when settings Save should auto-configure from WorkBuddy."""
     from pa_agent.ai.cursor_connector import is_openclaw_cs_model
     from pa_agent.ai.qclaw_connector import is_openclaw_model
+    from pa_agent.ai.qoder_connector import is_openclaw_qc_model
+    from pa_agent.ai.trae_connector import is_openclaw_twc_model
 
     # ``openclaw`` / ``openclaw/*`` is QClaw's Agent alias — never WorkBuddy,
     # even if a stale base_url still points at copilot.tencent.com.
-    if is_openclaw_model(model) or is_openclaw_cs_model(model):
+    if (
+        is_openclaw_model(model)
+        or is_openclaw_cs_model(model)
+        or is_openclaw_twc_model(model)
+        or is_openclaw_qc_model(model)
+    ):
         return False
     if is_openclaw_wb_model(model):
         return True

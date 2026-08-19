@@ -79,11 +79,11 @@ def _is_deepseek_native(base_url: str) -> bool:
 
 
 def _is_deepseek_model(model: str) -> bool:
-    """True for DeepSeek model ids; excludes QClaw ``openclaw`` and WorkBuddy ``openclaw_wb`` Agent aliases."""
+    """True for DeepSeek model ids; excludes QClaw/WorkBuddy/Cursor/TRAE/Qoder Agent aliases."""
     m = (model or "").lower()
-    if m in ("openclaw", "openclaw_wb", "openclaw_cs"):
+    if m in ("openclaw", "openclaw_wb", "openclaw_cs", "openclaw_twc", "openclaw_qc"):
         return False
-    if m.startswith("openclaw/") or m.startswith("openclaw_wb/") or m.startswith("openclaw_cs/"):
+    if m.startswith("openclaw/") or m.startswith("openclaw_wb/") or m.startswith("openclaw_cs/") or m.startswith("openclaw_twc/") or m.startswith("openclaw_qc/"):
         return False
     return "deepseek" in m
 
@@ -114,13 +114,15 @@ def _is_workbuddy_agent(settings: AIProviderSettings) -> bool:
 
 
 def _is_openclaw_agent_model(model: str) -> bool:
-    """True for QClaw/WorkBuddy/Cursor OpenClaw Agent model aliases."""
+    """True for QClaw/WorkBuddy/Cursor/TRAE/Qoder OpenClaw Agent model aliases."""
     m = (model or "").lower()
     return (
-        m in ("openclaw", "openclaw_wb", "openclaw_cs")
+        m in ("openclaw", "openclaw_wb", "openclaw_cs", "openclaw_twc", "openclaw_qc")
         or m.startswith("openclaw/")
         or m.startswith("openclaw_wb/")
         or m.startswith("openclaw_cs/")
+        or m.startswith("openclaw_twc/")
+        or m.startswith("openclaw_qc/")
     )
 
 
@@ -188,10 +190,23 @@ def _is_minimax(base_url: str) -> bool:
     return "minimax.io" in url or "minimax.com" in url
 
 
+def _is_sensenova(base_url: str) -> bool:
+    """SenseNova (token.sensenova.cn) OpenAI-compatible gateway.
+
+    Provides deepseek-v4-flash 等 DeepSeek 模型的免费代理；其 max_tokens 上限为
+    384000（低于默认 _PRACTICAL_UNLIMITED_MAX_TOKENS），需单独限流以避免 400。
+    """
+    return "sensenova.cn" in (base_url or "").lower()
+
+
 # Packy claude-officially returns 400 if max_tokens exceeds model output cap.
 _PACKY_CLAUDE_MAX_OUTPUT_TOKENS = 128_000
 # DeepSeek API: max_tokens must be in [1, 393216].
 _DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216
+# SenseNova API: max_tokens is model-specific (per /v1/models max_output_length).
+# glm-5.2: [1, 131072]; deepseek-v4-flash / sensenova-*-flash-lite: [1, 65536].
+_SENSENOVA_GLM_MAX_OUTPUT_TOKENS = 131_072
+_SENSENOVA_DEFAULT_MAX_OUTPUT_TOKENS = 65_536
 
 
 def _model_uses_claude_adaptive(model: str) -> bool:
@@ -299,6 +314,11 @@ def _provider_max_output_tokens(settings: AIProviderSettings) -> int:
     # an OpenAI-compatible distributor/proxy rather than api.deepseek.com.
     if _is_deepseek_native(settings.base_url) or _is_deepseek_model(model):
         return _DEEPSEEK_MAX_OUTPUT_TOKENS
+    if _is_sensenova(settings.base_url):
+        _smodel = (settings.model or "").lower()
+        if "glm" in _smodel:
+            return _SENSENOVA_GLM_MAX_OUTPUT_TOKENS
+        return _SENSENOVA_DEFAULT_MAX_OUTPUT_TOKENS
     if _is_mimo(settings):
         return mimo_max_output_tokens(settings.model)
     return _PRACTICAL_UNLIMITED_MAX_TOKENS
@@ -609,10 +629,22 @@ class DeepSeekClient:
             raise CancelledError("Request cancelled before API call")
 
         from pa_agent.ai.cursor_connector import is_openclaw_cs_model
+        from pa_agent.ai.qoder_connector import is_openclaw_qc_model
+        from pa_agent.ai.trae_connector import is_openclaw_twc_model
 
         if is_openclaw_cs_model(self._settings.model):
             raise RuntimeError(
                 "模型 openclaw_cs 必须使用 Cursor SDK 路由，但当前仍在使用 DeepSeekClient。"
+                "请在「AI 模型」设置中重新保存，或重启应用后再分析。"
+            )
+        if is_openclaw_twc_model(self._settings.model):
+            raise RuntimeError(
+                "模型 openclaw_twc 必须使用 TRAE Work CN 路由，但当前仍在使用 DeepSeekClient。"
+                "请在「AI 模型」设置中重新保存，或重启应用后再分析。"
+            )
+        if is_openclaw_qc_model(self._settings.model):
+            raise RuntimeError(
+                "模型 openclaw_qc 必须使用 Qoder CN 路由，但当前仍在使用 DeepSeekClient。"
                 "请在「AI 模型」设置中重新保存，或重启应用后再分析。"
             )
 

@@ -244,9 +244,10 @@ def render_three_window_summary(frame: Any, trend_ctx: dict[str, Any]) -> str:
         f"- **近期结构 K{min(RECENT_STRUCT_BARS, n)}-K1**：交易主方向 ≈ **{td}**（cycle_position / 入场逻辑优先此窗口）",
         f"- **即时惯性 K{min(SPIKE_NEAR_WINDOW, n)}-K1**："
         + (f"检测到 **{spike}** 尖峰特征" if spike else "无典型尖峰，按通道/区间逻辑"),
-        f"- **关系**：{rel}" + ("（新旧趋势冲突 → 近期为主，背景作风险参考）" if conflict else ""),
+        f"- **关系**：{rel}" + ("（新旧趋势冲突 → 近期为主，背景作风险参考；confidence≤55）" if conflict else ""),
         f"- **顺势规则**：{trend_ctx.get('with_trend_rule', '')}",
         "",
-        "node 2.2 须按上表填写：同向=共振提高置信；冲突=不否决近期、不自动减半仓位。",
+        "node 2.2 须按上表填写：同向=共振提高置信；冲突=不否决近期、不自动减半仓位，但 diagnosis_confidence 须≤55。",
+        "嵌套冲突时倾向更谨慎：弱信号优先 wait；禁止把长窗方向写成「已确认反转」。",
     ]
     return "\n".join(lines)

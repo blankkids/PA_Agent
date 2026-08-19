@@ -49,11 +49,17 @@ def should_use_qclaw_provider(
 ) -> bool:
     """True when settings Save should auto-configure from local QClaw."""
     from pa_agent.ai.cursor_connector import is_openclaw_cs_model
+    from pa_agent.ai.qoder_connector import is_openclaw_qc_model
+    from pa_agent.ai.trae_connector import is_openclaw_twc_model
     from pa_agent.ai.workbuddy_connector import is_openclaw_wb_model
 
-    # ``openclaw_wb`` / ``openclaw_wb/*`` is WorkBuddy's alias — never QClaw,
-    # even if a stale base_url still points at the local gateway.
-    if is_openclaw_wb_model(model) or is_openclaw_cs_model(model):
+    # Other openclaw routes take precedence over QClaw.
+    if (
+        is_openclaw_wb_model(model)
+        or is_openclaw_cs_model(model)
+        or is_openclaw_twc_model(model)
+        or is_openclaw_qc_model(model)
+    ):
         return False
     if is_openclaw_model(model):
         return True

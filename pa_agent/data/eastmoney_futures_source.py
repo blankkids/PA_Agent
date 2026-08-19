@@ -252,6 +252,25 @@ def _futures_session_open(now: datetime | None = None) -> bool:
     return morning or afternoon or night or late_night
 
 
+# 无夜盘品种前缀: 股指期货 (IF/IC/IH/IM) + 国债期货 (T/TF/TS) + 部分品种
+_NO_NIGHT_FUTURES_PREFIXES: tuple[str, ...] = (
+    "IF", "IC", "IH", "IM",  # 股指期货 (中金所)
+    "T", "TF", "TS",          # 国债期货 (中金所)
+    "JD", "FB", "RR", "LH", "LG",  # 大商所无夜盘品种
+    "RS", "WH", "JR", "RI", "LR", "CY",  # 郑商所无夜盘品种
+    "SI", "LC", "PS", "PT", "PD",  # 广期所 (无夜盘)
+)
+
+
+def _futures_has_night_session(symbol: str) -> bool:
+    """判断品种是否有夜盘交易。无夜盘品种 15:00 收盘后 K 线即为已收盘。"""
+    prefix = re.match(r"^([A-Za-z]{1,3})", symbol.upper())
+    if not prefix:
+        return True  # 无法识别时保守假设有夜盘
+    p = prefix.group(1)
+    return p not in _NO_NIGHT_FUTURES_PREFIXES
+
+
 class EastMoneyFuturesSource(DataSource):
     """国内期货主力合约 K 线 (AkShare 期货接口)."""
 
@@ -412,9 +431,12 @@ class EastMoneyFuturesSource(DataSource):
         if _futures_session_open():
             self._apply_spot_to_forming(rows_asc)
 
+        # 对于无夜盘品种 (股指/国债等)，15:00 后即使 _futures_session_open()
+        # 因夜盘逻辑返回 True，也应将最新 K 线标记为已收盘
+        is_live = _futures_session_open() and _futures_has_night_session(self._symbol)
         rows_newest = list(reversed(rows_asc[-fetch_n:]))
         for i, row in enumerate(rows_newest):
-            row["closed"] = not (i == 0 and _futures_session_open())
+            row["closed"] = not (i == 0 and is_live)
 
         return _rows_to_kline_bars(rows_newest, n)
 
@@ -497,8 +519,18 @@ class EastMoneyFuturesSource(DataSource):
 
     def _apply_spot_to_forming(self, rows_asc: list[dict[str, Any]]) -> None:
         """交易时段内刷新最后一根 (forming) bar 的收盘价."""
-        if not _futures_session_open() or not rows_asc:
+        if not rows_asc:
             return
+        # 无夜盘品种在夜盘时段不刷新 (已收盘)
+        if not _futures_session_open():
+            return
+        if not _futures_has_night_session(self._symbol):
+            # 无夜盘品种只在日盘时段刷新
+            now = _cn_now()
+            t = now.hour * 60 + now.minute
+            day_session = (9 * 60 <= t < 11 * 60 + 30) or (13 * 60 + 30 <= t < 15 * 60)
+            if not day_session:
+                return
         price = self._fetch_realtime_price(self._symbol)
         if price is None:
             return
