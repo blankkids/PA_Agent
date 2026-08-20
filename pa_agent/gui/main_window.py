@@ -1152,11 +1152,11 @@ class MainWindow(QMainWindow):
                 pass
 
     def _reap_zombie_workers(self) -> None:
-        """Join zombie analysis workers that finished since last check."""
+        """Join zombie worker threads that finished since last check."""
         zombies = getattr(self, "_zombie_workers", None)
         if not zombies:
             return
-        still_alive: list[_AnalysisWorker] = []
+        still_alive: list = []
         for worker in zombies:
             if worker.isRunning():
                 still_alive.append(worker)
@@ -1166,6 +1166,27 @@ class MainWindow(QMainWindow):
             self._zombie_workers = still_alive
         else:
             self._zombie_workers = []
+
+    def _retire_worker_thread(self, worker: Any) -> None:
+        """Release a parentless QThread without destroying it mid-run.
+
+        Dropping the last Python reference while the OS thread is still
+        winding down destroys the C++ QThread ("QThread: Destroyed while
+        thread … is still running" + possible crash), so still-running
+        workers are parked in the zombie list and deleteLater()'d once
+        reaped by ``_reap_zombie_workers``.
+        """
+        if worker is None:
+            return
+        if not worker.isRunning():
+            worker.deleteLater()
+            return
+        zombies = getattr(self, "_zombie_workers", None)
+        if zombies is None:
+            zombies = []
+            self._zombie_workers = zombies
+        if worker not in zombies:
+            zombies.append(worker)
 
     def _cancel_analysis_prep_worker(self) -> None:
         """Drop any in-flight analysis prep worker (does not block the UI thread)."""
@@ -1179,9 +1200,7 @@ class MainWindow(QMainWindow):
             worker.failed.disconnect()
         except (TypeError, RuntimeError):
             pass
-        if worker.isRunning():
-            worker.wait(0)
-        worker.deleteLater()
+        self._retire_worker_thread(worker)
 
     def _cancel_analysis_worker(self, *, join_ms: int = 0) -> None:
         """Cancel the AI worker and invalidate any pending finished callbacks."""
@@ -1231,6 +1250,7 @@ class MainWindow(QMainWindow):
                         "it will eventually finish but results will be ignored",
                         _WORKER_JOIN_TIMEOUT_MS,
                     )
+            self._retire_worker_thread(sfw)
 
     def _reap_zombie_loops(self) -> None:
         """Join any zombie RefreshLoops that have finished since last check.
@@ -2653,11 +2673,14 @@ class MainWindow(QMainWindow):
 
         bars_raw = self._bars_for_analysis_submit(bar_count)
         if not bars_raw:
+            # RefreshLoop 尚未推送数据：后台拉取一次快照，拿到后再 arm（或直接提交）。
             logger.warning(
-                "_arm_wait_for_bar_close：bars 为空（RefreshLoop 尚未推送数据？），放弃"
+                "_arm_wait_for_bar_close：bars 为空（RefreshLoop 尚未推送数据），转入后台获取K线"
             )
-            self._status_bar.showMessage("数据不足，请等待图表刷新后再提交")
-            return False
+            self._fetch_bars_then_arm_wait_close(
+                symbol, timeframe, bar_count, force_incremental=force_incremental
+            )
+            return True
 
         forming_ts = current_forming_ts(
             bars_raw,
@@ -2704,6 +2727,71 @@ class MainWindow(QMainWindow):
                 f"等待当前K线收盘…（{ts_hint}，收盘后将自动{submit_hint}）"
             )
         return True
+
+    def _fetch_bars_then_arm_wait_close(
+        self,
+        symbol: str,
+        timeframe: str,
+        bar_count: int,
+        *,
+        force_incremental: bool = False,
+    ) -> None:
+        """Fetch K-lines in the background, then arm the wait-for-close (or submit).
+
+        Used when 「等待收盘后提交」 fires before RefreshLoop has pushed its
+        first frame — mirrors ``_start_analysis_async_fetch`` but re-arms the
+        bar-close wait once bars arrive instead of submitting straight away.
+        """
+        data_source = getattr(self._ctx, "data_source", None)
+        if data_source is None or not getattr(data_source, "_connected", False):
+            self._status_bar.showMessage("数据源未连接")
+            return
+
+        # Cancel any previous fetch; its callbacks die with the generation token.
+        self._cancel_snapshot_fetch_worker()
+
+        from pa_agent.gui.snapshot_worker import SnapshotFetchWorker
+        from pa_agent.data.snapshot import INDICATOR_WARMUP_BARS
+
+        self._status_bar.showMessage("正在后台获取K线，获取后等待收盘…")
+        worker = SnapshotFetchWorker(
+            data_source, bar_count + INDICATOR_WARMUP_BARS + 5, parent=None
+        )
+        fetch_id = object()
+        self._snapshot_fetch_id = fetch_id
+        self._snapshot_fetch_worker = worker
+
+        def _on_bars(bars: list) -> None:
+            if getattr(self, "_snapshot_fetch_id", None) is not fetch_id:
+                return  # stale fetch — ignore
+            if not _qobject_alive(self):
+                return
+            self._snapshot_fetch_worker = None
+            self._retire_worker_thread(worker)
+            if not self._bars_sufficient_for_analysis(bars, bar_count):
+                self._status_bar.showMessage("数据不足，请等待图表刷新后再提交")
+                return
+            self._last_frame_ready_bars = list(bars)
+            # bars 已就位：直接走正常 arm 流程（最新K线已收盘则立即提交）。
+            self._arm_wait_for_bar_close(
+                symbol,
+                timeframe,
+                bar_count,
+                force_incremental=force_incremental,
+            )
+
+        def _on_fail(msg: str) -> None:
+            if getattr(self, "_snapshot_fetch_id", None) is not fetch_id:
+                return  # stale fetch — ignore
+            if not _qobject_alive(self):
+                return
+            self._snapshot_fetch_worker = None
+            self._retire_worker_thread(worker)
+            self._status_bar.showMessage(msg or "获取K线失败")
+
+        worker.bars_ready.connect(_on_bars)
+        worker.failed.connect(_on_fail)
+        worker.start()
 
     def _on_demo_mode_button(self) -> None:
         """Enter demo mode (manual/auto) or exit if already active."""
@@ -3045,7 +3133,9 @@ class MainWindow(QMainWindow):
             if self._cancel_token is not None:
                 self._cancel_token.set()
             self._worker.wait(_WORKER_JOIN_TIMEOUT_MS)
+            worker = self._worker
             self._worker = None
+            self._retire_worker_thread(worker)
 
         # When auto-chaining records, we reuse the same demo "kind".
         prev_kind = self._demo_mode_kind
@@ -3365,6 +3455,7 @@ class MainWindow(QMainWindow):
             if not _qobject_alive(self):
                 return
             self._snapshot_fetch_worker = None
+            self._retire_worker_thread(worker)
             if not self._bars_sufficient_for_analysis(bars, bar_count):
                 self._status_bar.showMessage("数据不足，请等待图表刷新后再提交")
                 return
@@ -3383,6 +3474,7 @@ class MainWindow(QMainWindow):
             if not _qobject_alive(self):
                 return
             self._snapshot_fetch_worker = None
+            self._retire_worker_thread(worker)
             self._status_bar.showMessage(msg or "获取K线失败")
 
         worker.bars_ready.connect(_on_bars)
@@ -3435,6 +3527,7 @@ class MainWindow(QMainWindow):
             if not _qobject_alive(self):
                 return
             self._prep_worker = None
+            self._retire_worker_thread(prep)
             self._launch_analysis_worker(
                 symbol=symbol,
                 timeframe=timeframe,
@@ -3450,6 +3543,7 @@ class MainWindow(QMainWindow):
             if not _qobject_alive(self):
                 return
             self._prep_worker = None
+            self._retire_worker_thread(prep)
             self._analysis_in_progress = False
             self._update_submit_button_state()
             self._status_bar.showMessage(msg or "准备分析失败")
@@ -4514,9 +4608,11 @@ class MainWindow(QMainWindow):
         if not self._ui_is_alive():
             return
         try:
+            worker = self._worker
             self._analysis_in_progress = False
             self._auto_incremental_pending = False
             self._worker = None
+            self._retire_worker_thread(worker)
             self._update_submit_button_state()
 
             # Reap any zombie workers / refresh loops that finished while busy
