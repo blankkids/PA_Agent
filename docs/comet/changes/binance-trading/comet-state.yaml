@@ -1,0 +1,345 @@
+schema: comet.native.v4
+name: binance-trading
+language: zh-CN
+phase: archive
+status: active
+state_version: 15
+brief: brief.md
+document_constraints_version: 3
+shape_confirmation_hash: 282c08c7383ac4a4459dcd0bf69dcb283dbb450d8cb6293e3e49f0adb2b67221
+spec_changes:
+  - capability: binance-trading
+    operation: create
+    source: specs/binance-trading/spec.md
+workspace:
+  isolation: current
+  change_branch: feature/binance-data-source
+  target_branch: feature/binance-data-source
+  finish: null
+loop:
+  stage: archive-ready
+  goal_cycle: 2
+  iteration: 3
+  attempt: 1
+  retry_epoch: 0
+  failed_iteration_count: 1
+  no_progress_count: 0
+  execution_failure_count: 0
+  previous_unresolved_ids: []
+  next_action: archive
+acceptance:
+  - id: A1
+    source: brief.md
+    text: "**现货市价闭环**：Testnet 配 Key（市场=现货）→ 决策「市价单·做多」→ 确认（现货+Testnet 徽标）→ 市价买入成交 →
+      自动挂 OCO → 面板可见持仓/挂单 → 撤单/平仓 → 留痕"
+    result: passed
+    reason:
+      text: 现货市价闭环含撤单/平仓留痕；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A2
+    source: brief.md
+    text: "**现货 TP 分批**：决策带 TP1+TP2 → 确认后挂两组 OCO（TP1 半量+SL 半量 / TP2 半量+SL 半量）；TP1
+      成交后 OCO1 SL 腿联动取消，剩余半量由 OCO2 保护"
+    result: passed
+    reason:
+      text: 双 OCO 各半同 SL；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A3
+    source: brief.md
+    text: "**合约做多闭环**：市场切合约（行情自动切 fstream K 线）→ 市价做多 → TP1/TP2 各半 reduceOnly +
+      closePosition SL → 面板可见合约持仓与杠杆"
+    result: passed
+    reason:
+      text: 合约做多闭环（exchange_information 修复解锁）；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A4
+    source: brief.md
+    text: "**合约做空**：决策「做空」→ 合约 SELL 开空 → SL/TP 方向自动反转（SL 在上、TP 在下）→ 保护单正确挂出"
+    result: passed
+    reason:
+      text: 合约做空方向反转；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A5
+    source: brief.md
+    text: "**杠杆设置**：设置中调杠杆（默认 5x）→ 下单前按设置调整合约杠杆并回显在确认对话框"
+    result: passed
+    reason:
+      text: 杠杆默认5x下单前生效回显；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A6
+    source: brief.md
+    text: "**现货做空拦截**：市场=现货时做空决策点执行 → 提示「现货不支持做空，请切到合约市场」"
+    result: passed
+    reason:
+      text: 现货做空拦截引导切合约；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A7
+    source: brief.md
+    text: "**限价成交检测**：限价挂单 → 轮询检测成交 → 自动挂保护单 → 通知"
+    result: passed
+    reason:
+      text: 限价成交检测 get_order/query_order 分流+启动兜底接线；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见
+        checks_run）
+      truncated: false
+  - id: A8
+    source: brief.md
+    text: "**未启用引导**：trade_enabled 关闭或未配 Key → 提示并打开设置，不发交易请求"
+    result: passed
+    reason:
+      text: 未启用/缺 Key 三层护栏；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A9
+    source: brief.md
+    text: "**实盘切换警告**：切实盘 → 红色风险警告确认；取消保持 Testnet"
+    result: passed
+    reason:
+      text: 实盘红色警告+取消回滚；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A10
+    source: brief.md
+    text: "**错误友好化**：余额不足（-2010）→ 中文提示所需与可用金额；精度不符（-1013）→ 自动截断后仍失败时提示"
+    result: passed
+    reason:
+      text: 错误中文映射+留痕码；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A11
+    source: brief.md
+    text: "**金额护栏**：金额超上限被拒并提示上限值"
+    result: passed
+    reason:
+      text: 金额上限三重护栏；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+  - id: A12
+    source: brief.md
+    text: "**Secret 安全**：settings.json 只存密文；executions.jsonl 无 Secret；重启后解密可用"
+    result: passed
+    reason:
+      text: Secret DPAPI 加密/脱敏；通过：代码强制点+SDK 签名内省交叉核实+测试证据（见 checks_run）
+      truncated: false
+builder_handoff:
+  candidate_id: 7f6ae3e2-ee4e-4344-83f5-e2bbf7d3360a
+  identity_provider: skill-coordinated
+  builder_execution_ref: skill-coordinated:builder:be214b56-f9ec-4fef-9959-b45ce7fd1218
+  iteration: 3
+  summary:
+    text: 第三轮：修复第2轮 Verifier 发现的 futures SDK 错配——(1) symbol_filters 改用无参
+      exchange_information() 并客户端按 symbol 过滤（真实签名内省核实），未知交易对明确报错；(2)
+      cancel_algo_order 去掉不存在的 symbol 参数；(3) change_position_mode 传字符串 "false"（原
+      bool 会错）；(4) cancel_all 失败不再吞异常恒报成功（上抛）；(5) 平仓前撤保护单移入后台 close 动作并单独留痕；(6)
+      _check_unprotected_positions 移后台线程；(7) 设置对话框死 import 清理。新增 5 项 SDK
+      签名防回归测试（exchange_information 过滤/未知交易对/cancel_algo 无 symbol/cancel_all
+      失败上抛/position_mode 字符串），76 项交易相关单测全过；全量仅 5 个存量失败。Testnet 真实冒烟仍需用户 API Key。
+    truncated: false
+  addressed_acceptance_ids:
+    - A1
+    - A2
+    - A3
+    - A4
+    - A5
+    - A6
+    - A7
+    - A8
+    - A9
+    - A10
+    - A11
+    - A12
+  acceptance_review:
+    - id: A1
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 撤单/撤全部/平仓留痕（第2轮已验）；本轮平仓前撤保护单移入后台线程 close 动作并单独留痕
+    - id: A2
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 双 OCO 各半同 SL（已验无回归）
+    - id: A3
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 修复根因：futures symbol_filters 改无参 exchange_information() + 客户端按 symbol
+        过滤（内省核实签名），未知交易对报 TradeError；合约下单计划链路对真实 SDK 可走通
+    - id: A4
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 做空逻辑已验正确；A3 根因修复后合约做空链路恢复可执行
+    - id: A5
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 修复：change_position_mode 传字符串 "false"（真实签名 Optional[str]，fake 内断言+专测）；杠杆链路随
+        A3 修复打通
+    - id: A6
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 现货做空拦截（已验无回归）
+    - id: A7
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 第2轮修复已验；无回归
+    - id: A8
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 三层护栏（已验无回归）
+    - id: A9
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 红色富文本警告（已验）；本轮清理死 import
+    - id: A10
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 中文映射+留痕码（已验无回归）
+    - id: A11
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: 金额三重护栏（已验无回归）
+    - id: A12
+      status: implemented-with-evidence
+      evidence:
+        - 76 项交易/行情单测全过（含第3轮新增 5 项 SDK 签名防回归测试）
+      note: DPAPI 加密/脱敏（已验无回归）
+  checks:
+    - name:
+        text: trade-and-source-unit-round3
+        truncated: false
+      result: passed
+      note:
+        text: 76 项全过（+5 项 SDK 签名防回归）
+        truncated: false
+    - name:
+        text: full-suite-regression-round3
+        truncated: false
+      result: passed
+      note:
+        text: 全量仅 5 个存量失败（deepseek×3+json_validator×2，HEAD 一致）
+        truncated: false
+  checks_truncated: false
+  known_limits:
+    - text: Testnet 真实下单端到端冒烟未执行：需用户申请 testnet API Key；代码路径 76 项单测覆盖且全部被调方法已对已装 SDK
+        内省核对
+      truncated: false
+    - text: 合约 TP 用 TAKE_PROFIT_MARKET（市价触发有滑点）；spot order_oco 为币安 Deprecated
+        端点（仍可用），真实行为待 Testnet 冒烟确认
+      truncated: false
+    - text: FillWatcher 单交易对设计（跟随当前订阅）
+      truncated: false
+  known_limits_truncated: false
+  review: null
+  submitted_at: 2026-10-18T17:33:51.329Z
+blockers: []
+verification:
+  candidate_id: 7f6ae3e2-ee4e-4344-83f5-e2bbf7d3360a
+  identity_provider: skill-coordinated
+  verifier_execution_ref: skill-coordinated:verifier:9b0776b5-2dfc-479f-a427-4db7f77050f8
+  iteration: 3
+  attempt: 1
+  assurance: skill-coordinated
+  verdict: pass
+  checks:
+    - id: trade-unit-tests
+      name:
+        text: Binance 交易功能单元测试
+        truncated: false
+      argv_display:
+        - text: -m
+          truncated: false
+        - text: pytest
+          truncated: false
+        - text: tests/unit/test_trade_backend.py
+          truncated: false
+        - text: tests/unit/test_trade_trader.py
+          truncated: false
+        - text: tests/unit/test_trade_dialogs.py
+          truncated: false
+        - text: tests/unit/test_fill_watcher.py
+          truncated: false
+        - text: tests/unit/test_binance_source.py
+          truncated: false
+        - text: -q
+          truncated: false
+      argv_truncated: false
+      cwd_ref: .
+      status: passed
+      exit_code: 0
+      duration_ms: 6534
+  summary:
+    text: 第3轮独立验收 12/12 全部通过；本轮 7 项修复全部核实属实；真实资金护栏逐条定位确认；76 项交易单测全过。6 项非阻塞残留风险已列明。
+    truncated: false
+  risks:
+    - text: _execute_order_flow 在 GUI 线程同步 verify_clock/symbol_filters（futures 全量
+        exchange_information 响应大，可能短暂卡 UI）
+      truncated: false
+    - text: 确认对话框金额微调后 futures 数量不重算（微调对合约订单规模不生效；护栏不受影响）
+      truncated: false
+    - text: cancel_all 失败上抛裸 SDK 异常未包 TradeError，通用分支无 -failed 留痕
+      truncated: false
+    - text: fill_watcher.py 残留 unused import time（外观）
+      truncated: false
+    - text: brief 目录清单 test_secret_store.py 实际并入 test_trade_trader.py（覆盖等价）
+      truncated: false
+    - text: Testnet 真实下单冒烟待用户 API Key（代码+单测+签名内省已覆盖）
+      truncated: false
+  risks_truncated: false
+  completed_at: 2026-10-18T17:43:12.192Z
+history:
+  - goal_cycle: 1
+    iteration: 0
+    attempt: 0
+    outcome: recovery
+    unresolved_ids: []
+    summary:
+      text: Native confirmed acceptance criteria changed
+      truncated: false
+    completed_at: 2026-10-18T16:08:18.427Z
+  - goal_cycle: 2
+    iteration: 1
+    attempt: 1
+    outcome: fail
+    unresolved_ids:
+      - A1
+      - A7
+    summary:
+      text: 独立验收 12 项：10 pass / 2 fail（A1 撤单平仓留痕缺失、A7 现货 query_order 错配+兜底未接线）；另披露 9
+        项风险。
+      truncated: false
+    completed_at: 2026-10-18T17:01:32.747Z
+  - goal_cycle: 2
+    iteration: 2
+    attempt: 1
+    outcome: recovery
+    unresolved_ids: []
+    summary:
+      text: Observed implementation write before pa_agent/trade/binance_trader.py
+      truncated: false
+    completed_at: 2026-10-18T17:30:04.442Z
+  - goal_cycle: 2
+    iteration: 3
+    attempt: 1
+    outcome: pass
+    unresolved_ids: []
+    summary:
+      text: 第3轮独立验收 12/12 全部通过；本轮 7 项修复全部核实属实；真实资金护栏逐条定位确认；76 项交易单测全过。6 项非阻塞残留风险已列明。
+      truncated: false
+    completed_at: 2026-10-18T17:43:12.192Z
+history_overflow:
+  dropped_entries: 0
+  first_dropped_at: null
+  last_dropped_at: null
+  outcome_counts:
+    pass: 0
+    fail: 0
+    blocked: 0
+    execution-error: 0
+    recovery: 0
+verification_result: pass
+verification_report: verification.md
+archived: false
+created_at: 2026-10-18T15:56:28.316Z

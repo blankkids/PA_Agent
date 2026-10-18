@@ -40,12 +40,14 @@ _PRESET_SYMBOLS: tuple[str, ...] = (
 _SYMBOL_RE = re.compile(r"^[A-Z0-9]{5,24}$")
 
 # REST 备用域名：data-api.binance.vision 为官方纯行情镜像
-_REST_BASES: tuple[str, ...] = ("https://api.binance.com", "https://data-api.binance.vision")
+_REST_BASES_SPOT: tuple[str, ...] = ("https://api.binance.com", "https://data-api.binance.vision")
+_REST_BASES_FUT: tuple[str, ...] = ("https://fapi.binance.com",)
 # WebSocket 备用域名：data-stream.binance.vision 为官方纯行情流镜像
-_WS_URLS: tuple[str, ...] = (
+_WS_URLS_SPOT: tuple[str, ...] = (
     "wss://stream.binance.com:9443",
     "wss://data-stream.binance.vision",
 )
+_WS_URLS_FUT: tuple[str, ...] = ("wss://fstream.binance.com",)
 
 # 留空 binance.proxy 时按序探测的常见本地代理端口（clash / v2ray / shadowsocks）
 _LOCAL_PROXY_PORTS: tuple[int, ...] = (7890, 7897, 10809, 1080)
@@ -95,6 +97,9 @@ class BinanceSource(DataSource):
 
     def __init__(self, settings: Any = None) -> None:
         self._settings = settings
+        # 行情市场：settings.binance.market（spot=现货 / futures=USDT-M 合约）
+        market = str(getattr(getattr(settings, "binance", None), "market", "spot") or "spot")
+        self.market = "futures" if market == "futures" else "spot"
         self._symbol: str = ""
         self._timeframe: str = ""
         self._connected = False
@@ -121,10 +126,16 @@ class BinanceSource(DataSource):
 
     def connect(self) -> None:
         try:
-            from binance_sdk_spot.spot import Spot  # noqa: F401
+            if self.market == "futures":
+                from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (  # noqa: F401
+                    DerivativesTradingUsdsFutures,
+                )
+            else:
+                from binance_sdk_spot.spot import Spot  # noqa: F401
         except ImportError as exc:
             raise DataSourceTransientError(
-                "未安装 binance-sdk-spot，请执行: pip install binance-sdk-spot"
+                "未安装 Binance SDK，请执行: pip install binance-sdk-spot "
+                "binance-sdk-derivatives-trading-usds-futures"
             ) from exc
 
         self._proxy, self._proxy_source = self._resolve_proxy()
@@ -305,15 +316,15 @@ class BinanceSource(DataSource):
     def _rest_fetch_rows(self, symbol: str, interval: str, limit: int) -> list[Any]:
         """带域名/代理路由记忆的 REST klines；返回原始数组行（旧→新）."""
         from binance_common.configuration import ConfigurationRestAPI
-        from binance_sdk_spot.spot import Spot
 
-        limit = min(max(limit, 10), 1000)
+        limit = min(max(limit, 10), 1000 if self.market == "spot" else 1500)
+        bases = _REST_BASES_FUT if self.market == "futures" else _REST_BASES_SPOT
         routes: list[tuple[str, dict | None]] = []
         if self._rest_route:
             routes.append(self._rest_route)
-        pairs: list[tuple[str, dict | None]] = [(b, None) for b in _REST_BASES]
+        pairs: list[tuple[str, dict | None]] = [(b, None) for b in bases]
         if self._proxy:
-            pairs += [(b, self._proxy) for b in _REST_BASES]
+            pairs += [(b, self._proxy) for b in bases]
         for p in pairs:
             if p not in routes:
                 routes.append(p)
@@ -324,10 +335,20 @@ class BinanceSource(DataSource):
                 cfg = ConfigurationRestAPI(
                     base_path=base, timeout=8000, retries=0, proxy=proxy
                 )
-                client = Spot(config_rest_api=cfg)
-                resp = client.rest_api.klines(
-                    symbol=symbol, interval=interval, limit=limit
-                )
+                if self.market == "futures":
+                    from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
+                        DerivativesTradingUsdsFutures,
+                    )
+
+                    client = DerivativesTradingUsdsFutures(config_rest_api=cfg).rest_api
+                    resp = client.kline_candlestick_data(
+                        symbol=symbol, interval=interval, limit=limit
+                    )
+                else:
+                    from binance_sdk_spot.spot import Spot
+
+                    client = Spot(config_rest_api=cfg).rest_api
+                    resp = client.klines(symbol=symbol, interval=interval, limit=limit)
                 rows = resp.data()
                 if rows:
                     self._rest_route = (base, proxy)
@@ -412,14 +433,14 @@ class BinanceSource(DataSource):
     async def _ws_run(self, symbol: str, interval: str) -> None:
         """在专用 loop 上尝试各 (url, 路由) 组合，成功后由 SDK 自动重连保活."""
         from binance_common.configuration import ConfigurationWebSocketStreams
-        from binance_sdk_spot.spot import Spot
 
         stop = self._ws_stop_evt
         sym_lower = symbol.lower()
+        ws_urls = _WS_URLS_FUT if self.market == "futures" else _WS_URLS_SPOT
         attempts: list[tuple[str, dict | None]] = []
         if self._proxy:
-            attempts += [(u, self._proxy) for u in _WS_URLS]
-        attempts += [(u, None) for u in _WS_URLS]
+            attempts += [(u, self._proxy) for u in ws_urls]
+        attempts += [(u, None) for u in ws_urls]
 
         conn = None
         client = None
@@ -435,12 +456,28 @@ class BinanceSource(DataSource):
                         reconnect_attempts=8,
                         proxy=proxy,
                     )
-                    client = Spot(config_ws_streams=cfg)
-                    conn = await asyncio.wait_for(
-                        client.websocket_streams.create_connection(),
-                        _WS_CONNECT_TIMEOUT_S,
-                    )
-                    stream = await conn.kline(symbol=sym_lower, interval=interval)
+                    if self.market == "futures":
+                        from binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures import (
+                            DerivativesTradingUsdsFutures,
+                        )
+
+                        client = DerivativesTradingUsdsFutures(config_ws_streams=cfg)
+                        conn = await asyncio.wait_for(
+                            client.websocket_streams.create_connection(),
+                            _WS_CONNECT_TIMEOUT_S,
+                        )
+                        stream = await conn.kline_candlestick_streams(
+                            symbol=sym_lower, interval=interval
+                        )
+                    else:
+                        from binance_sdk_spot.spot import Spot
+
+                        client = Spot(config_ws_streams=cfg)
+                        conn = await asyncio.wait_for(
+                            client.websocket_streams.create_connection(),
+                            _WS_CONNECT_TIMEOUT_S,
+                        )
+                        stream = await conn.kline(symbol=sym_lower, interval=interval)
                     stream.on("message", self._on_ws_message)
                     logger.info(
                         "Binance WS 已连接 %s（proxy=%s）",

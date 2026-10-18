@@ -304,6 +304,23 @@ wheels = [
 ]
 
 [[package]]
+name = "binance-sdk-derivatives-trading-usds-futures"
+version = "18.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "binance-common" },
+    { name = "pycryptodome" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/f8/9792154a35a9726ad88ec7d1388bd01a59fe50c940f2b457c1856601008f/binance_sdk_derivatives_trading_usds_futures-18.0.0.tar.gz", hash = "sha256:786db778dd3065036bd02722fada824916137898f64d937e2234a523953663ca", size = 169379, upload-time = "2026-10-15T13:33:28.448Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/4d/d00b17fd9ff42fb9ee1cc8cb57c2b675aa00f00fe17458df119ee75239fe/binance_sdk_derivatives_trading_usds_futures-18.0.0-py3-none-any.whl", hash = "sha256:e4e22c7f700938d3b1ed7c35b4f4496ccd40f750300974145c7fef720da80108", size = 601255, upload-time = "2026-10-15T13:33:29.851Z" },
+]
+
+[[package]]
 name = "binance-sdk-spot"
 version = "13.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1559,6 +1576,7 @@ source = { editable = "." }
 dependencies = [
     { name = "akshare" },
     { name = "baostock" },
+    { name = "binance-sdk-derivatives-trading-usds-futures" },
     { name = "binance-sdk-spot" },
     { name = "cryptography" },
     { name = "curl-cffi" },
@@ -1592,6 +1610,7 @@ dev = [
 requires-dist = [
     { name = "akshare", specifier = ">=1.14" },
     { name = "baostock", specifier = ">=0.8" },
+    { name = "binance-sdk-derivatives-trading-usds-futures", specifier = ">=18.0" },
     { name = "binance-sdk-spot", specifier = ">=13.2" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.4" },
     { name = "cryptography", specifier = ">=42" },

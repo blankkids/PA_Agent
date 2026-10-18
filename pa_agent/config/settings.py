@@ -147,11 +147,29 @@ class TushareSettings(BaseModel):
 
 
 class BinanceSettings(BaseModel):
-    """Binance 数据源设置（settings.json）."""
+    """Binance 数据源与交易设置（settings.json）."""
     model_config = ConfigDict(extra="ignore")
 
     #: 本地代理，如 http://127.0.0.1:7890；留空 = 自动探测常见本地代理端口
     proxy: str = ""
+    #: 交易总开关（默认关闭；关闭时不发起任何签名交易请求）
+    trade_enabled: bool = False
+    #: 交易市场：spot=现货，futures=USDT-M 永续合约
+    market: Literal["spot", "futures"] = "spot"
+    #: 合约杠杆（下单前按此调整，单向持仓）
+    leverage: int = Field(default=5, ge=1, le=20)
+    #: Binance API Key（明文存储，与 provider.api_key 同策略）
+    api_key: str = ""
+    #: API Secret 密文（DPAPI）；明文仅运行内存 api_secret，不落盘
+    api_secret_encrypted: str = ""
+    #: Testnet 默认启用；切实盘需红色警告确认
+    testnet: bool = True
+    #: 每笔下单金额（USDT）
+    stake_usdt: float = Field(default=100.0, gt=0)
+    #: 每笔金额上限（护栏）
+    max_stake_usdt: float = Field(default=10000.0, gt=0)
+    #: 运行内存明文 Secret（load 时解密填充；序列化排除）
+    api_secret: str = Field(default="", exclude=True)
 
 
 class PushPlusSettings(BaseModel):
@@ -263,6 +281,7 @@ def load_settings(path: Path | None = None) -> "Settings":
 
     migrated_feishu = _migrate_legacy_feishu_json(raw, path)
     settings = Settings.model_validate(raw)
+    _decrypt_binance_secret(settings)
     dirty = migrated_feishu
     if settings.pushplus.enabled and not settings.pushplus.token.strip():
         if not (os.environ.get("PUSHPLUS_TOKEN") or "").strip():
@@ -277,6 +296,41 @@ def load_settings(path: Path | None = None) -> "Settings":
     return settings
 
 
+def _decrypt_binance_secret(settings: "Settings") -> None:
+    """解密 binance.api_secret_encrypted → 内存 api_secret；失败置空并提示重录。"""
+    enc = (getattr(settings.binance, "api_secret_encrypted", "") or "").strip()
+    if not enc:
+        settings.binance.api_secret = ""
+        return
+    from pa_agent.security.secret_store import SecretStore
+
+    try:
+        settings.binance.api_secret = SecretStore.decrypt(enc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Binance API Secret 解密失败（换机或系统账户变更？），请在交易设置中重新录入: %s", exc
+        )
+        settings.binance.api_secret = ""
+
+
+def _apply_binance_secret_encryption(settings: "Settings", data: dict) -> None:
+    """落盘前：内存明文 Secret 加密写回 api_secret_encrypted；确保无明文字段。
+
+    api_secret 为空时保留原密文（设置界面清空输入 = 不变更，避免误清）。
+    """
+    binance = data.get("binance")
+    if not isinstance(binance, dict):
+        return
+    binance.pop("api_secret", None)  # exclude 序列化双保险
+    plain = (getattr(settings.binance, "api_secret", "") or "").strip()
+    if plain:
+        from pa_agent.security.secret_store import SecretStore
+
+        ct = SecretStore.encrypt(plain)
+        binance["api_secret_encrypted"] = ct
+        settings.binance.api_secret_encrypted = ct  # 内存同步，保持对象一致
+
+
 def save_settings(settings: "Settings", path: Path | None = None) -> None:
     """Persist settings to *path* (default: SETTINGS_JSON_PATH)."""
     from pa_agent.config.paths import SETTINGS_JSON_PATH
@@ -285,5 +339,6 @@ def save_settings(settings: "Settings", path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = settings.model_dump()
+    _apply_binance_secret_encryption(settings, data)
 
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

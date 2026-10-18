@@ -1,7 +1,7 @@
 """DecisionPanel — trading decision + market diagnosis summary."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from typing import Any
 
 from pa_agent.util.trade_metrics import (
@@ -118,6 +118,9 @@ class DecisionPanel(QWidget):
         super().__init__(parent)
         self._setup_ui()
 
+    #: 人工确认下单入口（携带决策 dict；仅当数据源/护栏满足时按钮可见）
+    order_execute_requested = pyqtSignal(dict)
+
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -126,7 +129,6 @@ class DecisionPanel(QWidget):
         title = QLabel("AI 交易决策")
         title.setObjectName("toolbarTitle")
         layout.addWidget(title)
-
         disclaimer = QLabel("分析仅供参考，不构成投资建议")
         disclaimer.setObjectName("mutedLabel")
         disclaimer.setWordWrap(True)
@@ -290,7 +292,40 @@ class DecisionPanel(QWidget):
         self._reasoning_edit.setMinimumHeight(120)
         layout.addWidget(self._reasoning_edit, stretch=1)
 
-        self.clear()
+        # 人工确认下单入口（默认隐藏；MainWindow 按数据源/护栏控制）
+        from PyQt6.QtWidgets import QPushButton  # noqa: local import 避免头部变动
+
+        self._execute_order_btn = QPushButton("⚡ 执行下单（人工确认）")
+        self._execute_order_btn.setObjectName("executeOrderButton")
+        self._execute_order_btn.setStyleSheet(
+            "background:#238636;color:white;font-weight:bold;"
+            "border-radius:6px;padding:8px 14px;font-size:14px;"
+        )
+        self._execute_order_btn.setToolTip(
+            "按当前 AI 决策生成订单计划，弹出确认对话框；确认后才真实下单。"
+        )
+        self._execute_order_btn.setVisible(False)
+        self._execute_order_btn.clicked.connect(self._on_execute_clicked)
+        layout.addWidget(self._execute_order_btn)
+        self._last_decision: dict | None = None
+        self._trade_visible_gate: bool = False  # 数据源/护栏由 MainWindow 设置
+
+    def _on_execute_clicked(self) -> None:
+        if self._last_decision:
+            self.order_execute_requested.emit(dict(self._last_decision))
+
+    def set_execute_enabled(self, enabled: bool) -> None:
+        """数据源为 Binance 且交易功能启用时由 MainWindow 置 True."""
+        self._trade_visible_gate = enabled
+        self._update_execute_button()
+
+    def _update_execute_button(self) -> None:
+        decision = self._last_decision
+        has_order = bool(
+            decision
+            and str(decision.get("order_type", "")) in ("限价单", "突破单", "市价单")
+        )
+        self._execute_order_btn.setVisible(bool(self._trade_visible_gate and has_order))
 
     def _apply_diag_chip_style(self, label: QLabel, *, color: str) -> None:
         label.setStyleSheet(
@@ -429,6 +464,8 @@ class DecisionPanel(QWidget):
         decision_stance: str | None = None,
         confidence_threshold: int | None = None,
     ) -> None:
+        self.clear()
+        self._last_decision = decision
         self._apply_market_diagnosis(diagnosis_summary, stage1_diagnosis)
 
         order_type = decision.get("order_type", _NO_ORDER)
@@ -545,6 +582,7 @@ class DecisionPanel(QWidget):
             )
 
         self._reasoning_edit.setPlainText(str(reasoning) if reasoning else "")
+        self._update_execute_button()
 
     def clear(self) -> None:
         self._trend_label.setText("趋势：—")

@@ -5,7 +5,7 @@ import logging
 import sys
 from typing import Any
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal, QObject
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal, pyqtSlot, QObject
 from PyQt6.QtGui import QAction, QCloseEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -328,6 +328,13 @@ class MainWindow(QMainWindow):
         self._debug_widget = self._ai_sidebar.debug
         self._prompt_files_panel = self._ai_sidebar.prompt_files
         self._decision_panel = self._ai_sidebar.decision
+        # Binance 人工确认下单入口
+        try:
+            self._decision_panel.order_execute_requested.connect(
+                self._execute_order_flow, Qt.ConnectionType.UniqueConnection
+            )
+        except Exception:  # noqa: BLE001
+            pass
         self._future_trend_panel = self._ai_sidebar.future_trend
         self._decision_tree_panel = self._ai_sidebar.decision_tree
         self._decision_flow_viz_panel = self._ai_sidebar.decision_flow_viz
@@ -377,6 +384,15 @@ class MainWindow(QMainWindow):
         _general_action = QAction("其他通用设置", self)
         _general_action.triggered.connect(self._open_general_settings_dialog)
         menu_bar.addAction(_general_action)
+
+        # 4. Binance 交易设置 / 交易面板 — 点击直接弹对话框
+        _trade_settings_action = QAction("Binance 交易设置", self)
+        _trade_settings_action.triggered.connect(self._open_binance_trade_settings)
+        menu_bar.addAction(_trade_settings_action)
+
+        _trade_panel_action = QAction("交易面板", self)
+        _trade_panel_action.triggered.connect(self._open_trade_panel)
+        menu_bar.addAction(_trade_panel_action)
 
         # 4. 演示模式 — 保留下拉菜单
         demo_menu = menu_bar.addMenu("演示模式")
@@ -1415,6 +1431,7 @@ class MainWindow(QMainWindow):
             )
             self._update_symbol_data_alert()
             self._refresh_chart_once()
+            self._sync_trade_entry_points()
         finally:
             self._switching = False
             self._update_submit_button_state()
@@ -4097,6 +4114,223 @@ class MainWindow(QMainWindow):
             daemon=True,
         ).start()
 
+    # ── Binance 交易执行 ────────────────────────────────────────────────────
+
+    def _binance_cfg(self):
+        settings = getattr(self._ctx, "settings", None)
+        return getattr(settings, "binance", None) if settings is not None else None
+
+    def _binance_trade_gate(self) -> bool:
+        """数据源为 Binance 且交易总开关已启用."""
+        if self._current_data_source_kind() != "binance":
+            return False
+        cfg = self._binance_cfg()
+        return bool(cfg and cfg.trade_enabled)
+
+    def _sync_trade_entry_points(self) -> None:
+        """数据源切换/设置保存后刷新下单入口可见性."""
+        panel = getattr(self, "_decision_panel", None)
+        if panel is not None:
+            panel.set_execute_enabled(self._binance_trade_gate())
+
+    def _make_trade_trader(self):
+        from pa_agent.trade.binance_trader import BinanceTrader
+
+        return BinanceTrader(getattr(self._ctx, "settings", None))
+
+    def _ensure_fill_watcher(self):
+        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+
+        if getattr(self, "_fill_watcher", None) is not None:
+            return self._fill_watcher
+        from pa_agent.trade.fill_watcher import FillWatcher
+
+        watcher = FillWatcher(self._make_trade_trader())
+
+        def _on_filled(order_id, plan, qty):
+            # watcher 线程内执行：挂保护单（网络调用在同线程安全进行）
+            from pa_agent.gui.trade_worker import place_protection_for_fill
+
+            ok, msg = place_protection_for_fill(watcher._trader, plan, qty)
+            QMetaObject.invokeMethod(
+                self, "_on_trade_notice", Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, msg),
+            )
+
+        def _on_error(order_id, err):
+            QMetaObject.invokeMethod(
+                self, "_on_trade_notice", Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, f"订单 {order_id} 状态查询失败：{err}"),
+            )
+
+        watcher.set_callbacks(_on_filled, _on_error)
+        self._fill_watcher = watcher
+        return watcher
+
+    @pyqtSlot(str)
+    def _on_trade_notice(self, message: str) -> None:
+        """后台交易事件通知（限价成交保护/查询失败）→ 状态栏+弹窗."""
+        self._status_bar.showMessage(message[:120])
+        if message.startswith("⚠"):
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, "交易保护提醒", message)
+
+    def _open_binance_trade_settings(self) -> None:
+        from pa_agent.gui.binance_trade_settings_dialog import BinanceTradeSettingsDialog
+
+        dlg = BinanceTradeSettingsDialog(
+            getattr(self._ctx, "settings", None), self)
+        if dlg.exec() == BinanceTradeSettingsDialog.DialogCode.Accepted:
+            self._sync_trade_entry_points()
+            # 市场切换可能需要重建数据源以切换行情
+            self._maybe_restart_binance_market()
+
+    def _maybe_restart_binance_market(self) -> None:
+        """binance 数据源下市场设置变化时重建行情源（spot/futures K 线切换）."""
+        if self._current_data_source_kind() != "binance":
+            return
+        src = getattr(self._ctx, "data_source", None)
+        cfg = self._binance_cfg()
+        want = getattr(cfg, "market", "spot") if cfg else "spot"
+        cur = getattr(src, "market", "spot") if src is not None else "spot"
+        if cur != want:
+            try:
+                self._switch_data_source("binance")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("切换 Binance 行情市场失败: %s", exc)
+
+    def _open_trade_panel(self) -> None:
+        cfg = self._binance_cfg()
+        if not (cfg and cfg.trade_enabled):
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.information(
+                self, "交易未启用",
+                "请先在「Binance 交易设置」中启用交易并配置 API Key。")
+            self._open_binance_trade_settings()
+            return
+        symbol = self._symbol_combo.currentText().strip() or "BTCUSDT"
+        from pa_agent.gui.trade_panel import TradePanel
+
+        self._trade_panel_dlg = TradePanel(
+            self._make_trade_trader(), symbol,
+            market=getattr(cfg, "market", "spot"),
+            testnet=bool(cfg.testnet),
+            parent=self,
+        )
+        self._trade_panel_dlg.show()
+        self._check_unprotected_positions(symbol)
+
+    def _check_unprotected_positions(self, symbol: str) -> None:
+        """后台线程兜底扫描：有持仓但无保护单 → 提示补挂（spec R4）."""
+        from PyQt6.QtCore import QThread
+
+        trader = self._make_trade_trader()
+
+        class _ScanWorker(QThread):
+            done = pyqtSignal(list)
+
+            def run(self_inner) -> None:  # noqa: N805
+                try:
+                    from pa_agent.trade.fill_watcher import scan_unprotected
+
+                    self_inner.done.emit(scan_unprotected(trader, symbol))
+                except Exception:  # noqa: BLE001
+                    self_inner.done.emit([])
+
+        def _on_scan(results: list) -> None:
+            for r in results:
+                if r.get("has_position") and not r.get("has_protection"):
+                    from PyQt6.QtWidgets import QMessageBox
+
+                    QMessageBox.warning(
+                        self, "存在未保护持仓",
+                        f"{r['symbol']} 当前有持仓但没有止盈/止损保护单。\n"
+                        f"请在交易面板中平仓，或根据最近决策手动补挂保护单。")
+                    break
+
+        self._scan_worker = _ScanWorker(self)
+        self._scan_worker.done.connect(_on_scan)
+        self._scan_worker.start()
+
+    def _execute_order_flow(self, decision: dict) -> None:
+        """决策面板/警报弹窗 → 护栏检查 → 确认对话框 → 后台执行."""
+        from PyQt6.QtWidgets import QMessageBox
+
+        cfg = self._binance_cfg()
+        if not (cfg and cfg.trade_enabled):
+            QMessageBox.information(
+                self, "交易未启用",
+                "交易功能未启用或未配置 API Key/Secret，请先完成交易设置。")
+            self._open_binance_trade_settings()
+            return
+        if not (cfg.api_key and (cfg.api_secret or cfg.api_secret_encrypted)):
+            QMessageBox.information(
+                self, "缺少凭据",
+                "请先在交易设置中填写 API Key 与 Secret（留空 Secret 表示沿用已存值）。")
+            self._open_binance_trade_settings()
+            return
+        symbol = self._symbol_combo.currentText().strip() or "BTCUSDT"
+        market = getattr(cfg, "market", "spot")
+        stake = float(cfg.stake_usdt or 100.0)
+        max_stake = float(cfg.max_stake_usdt or 10000.0)
+
+        trader = self._make_trade_trader()
+        try:
+            trader.verify_clock()
+            filters = trader.symbol_filters(symbol)
+            # 实时参考价：取当前图表最新收盘价
+            last_price = None
+            frame = getattr(self, "_last_frame_ready_bars", None)
+            if frame:
+                try:
+                    last_price = float(frame[0].close)
+                except (TypeError, ValueError, IndexError):
+                    last_price = None
+            from pa_agent.trade.errors import TradeBlockedError
+            from pa_agent.trade.order_plan import build_order_plan
+
+            plan = build_order_plan(
+                decision, symbol, market=market, stake_usdt=stake,
+                leverage=int(cfg.leverage or 5), filters=filters,
+                last_price=last_price,
+            )
+        except TradeBlockedError as exc:
+            QMessageBox.warning(self, "无法生成订单", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "订单计划失败", f"获取交易对信息或构建计划失败：{exc}")
+            return
+
+        from pa_agent.gui.order_confirm_dialog import OrderConfirmDialog
+
+        dlg = OrderConfirmDialog(plan, testnet=bool(cfg.testnet),
+                                 max_stake=max_stake, parent=self)
+        if dlg.exec() != OrderConfirmDialog.DialogCode.Accepted or dlg.final_stake is None:
+            return
+        final_stake = float(dlg.final_stake)
+        if final_stake != plan.stake_usdt:
+            from dataclasses import replace
+
+            plan = replace(plan, stake_usdt=final_stake)
+
+        from pa_agent.gui.trade_worker import TradeEntryWorker
+
+        self._trade_worker = TradeEntryWorker(
+            trader, self._ensure_fill_watcher(), plan)
+        self._trade_worker.succeeded.connect(
+            lambda msg: (self._status_bar.showMessage(msg[:120]),
+                         QMessageBox.information(self, "下单成功", msg)))
+        self._trade_worker.failed.connect(
+            lambda msg: (self._status_bar.showMessage(msg[:120]),
+                         QMessageBox.warning(self, "下单失败/风险", msg)))
+        self._trade_worker.limit_placed.connect(
+            lambda oid, msg: self._status_bar.showMessage(msg[:120]))
+        self._status_bar.showMessage(
+            f"正在提交 {plan.symbol} {plan.direction} 订单（{'Testnet' if cfg.testnet else '实盘'}）…")
+        self._trade_worker.start()
+
     def _maybe_alert_order_opportunity(self, decision_inner: dict) -> bool:
         """Beep, popup, and focus decision tab when stage-2 proposes an order."""
         if not self._order_opportunity_alert_enabled():
@@ -4113,7 +4347,10 @@ class MainWindow(QMainWindow):
         sidebar = getattr(self, "_ai_sidebar", None)
         if sidebar is not None:
             sidebar.focus_decision()
-        show_order_opportunity_alert(self, decision_inner)
+        from PyQt6.QtWidgets import QMessageBox  # noqa: F401 — 保持惰性导入风格
+
+        on_execute = self._execute_order_flow if self._binance_trade_gate() else None
+        show_order_opportunity_alert(self, decision_inner, on_execute=on_execute)
         return True
 
     def _trigger_decision_flow_playback(self) -> None:

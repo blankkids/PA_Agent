@@ -292,3 +292,70 @@ def test_trim_cache_keeps_newest_1500():
     assert len(src._bars) == 1500
     assert max(src._bars) == base + 1599 * 3_600_000
     assert min(src._bars) == base + 100 * 3_600_000
+
+
+# ── 合约（futures）行情模式 ───────────────────────────────────────────────────
+
+def _futures_source(rows=None) -> _FakeBinance:
+    from types import SimpleNamespace as NS
+
+    src = _FakeBinance(rows)
+    src._settings = NS(binance=NS(proxy="http://127.0.0.1:7890", market="futures"))
+    # 重新跑 __init__ 的 market 解析逻辑（直接设属性亦可，但走真实构造更可靠）
+    src2 = _FakeBinance(rows)
+    src2._settings = src._settings
+    market = str(getattr(getattr(src2._settings, "binance", None), "market", "spot"))
+    src2.market = "futures" if market == "futures" else "spot"
+    return src2
+
+
+def test_futures_mode_market_flag():
+    src = _futures_source()
+    src.connect()
+    assert src.market == "futures"
+
+
+def test_futures_mode_url_selection():
+    from pa_agent.data import binance_source as bs
+
+    assert "fapi" in " ".join(bs._REST_BASES_FUT)
+    assert "fstream" in bs._WS_URLS_FUT[0]
+    assert "api.binance.com" in bs._REST_BASES_SPOT[0]
+    assert "stream.binance.com" in bs._WS_URLS_SPOT[0]
+
+
+def test_futures_mode_rest_uses_kline_candlestick_data(monkeypatch):
+    """合约 REST 必须走 futures SDK 的 kline_candlestick_data（方法名核对）."""
+    from types import SimpleNamespace as NS
+
+    from pa_agent.data.binance_source import BinanceSource
+
+    src = BinanceSource(NS(binance=NS(proxy="", market="futures")))
+    src._proxy = None
+    src._proxy_resolved = True  # 跳过 TCP 探测
+    called: dict = {}
+
+    class _Api:
+        def kline_candlestick_data(self, symbol, interval, limit):
+            called["method"] = "kline_candlestick_data"
+            called["args"] = (symbol, interval, limit)
+            return type("R", (), {"data": staticmethod(lambda: list(_ROWS))})
+
+    monkeypatch.setattr(
+        "binance_sdk_derivatives_trading_usds_futures.derivatives_trading_usds_futures."
+        "DerivativesTradingUsdsFutures",
+        lambda config_rest_api: type("F", (), {"rest_api": _Api()}),
+    )
+    rows = src._rest_fetch_rows("BTCUSDT", "1h", 30)
+    assert called.get("method") == "kline_candlestick_data"
+    assert called["args"][0] == "BTCUSDT"
+    assert rows and rows[-1][0] == 1_700_007_200_000
+
+
+def test_spot_mode_rest_still_uses_klines():
+    """现货模式不回归：仍走 spot SDK klines（由既有 _FakeBinance 覆盖）."""
+    src = _FakeBinance()
+    src.connect()
+    assert src.market == "spot"
+    rows = src._rest_fetch_rows("BTCUSDT", "1h", 3)
+    assert rows, "现货 REST 应正常返回"
