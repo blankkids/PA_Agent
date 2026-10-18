@@ -5,6 +5,7 @@ from typing import Literal
 
 from pa_agent.data.base import DataSource
 from pa_agent.data.market_defaults import (
+    BINANCE_DEFAULT_SYMBOL,
     A_SHARE_DEFAULT_SYMBOL,
     GOLD_MT5_SYMBOL,
     GOLD_TV_SYMBOL,
@@ -13,6 +14,7 @@ from pa_agent.data.market_defaults import (
 DataSourceKind = Literal[
     "mt5",
     "tradingview",
+    "binance",
     "akshare",
     "eastmoney",
     "eastmoney_futures",
@@ -25,6 +27,7 @@ DataSourceKind = Literal[
 DATA_SOURCE_CHOICES: tuple[tuple[DataSourceKind, str], ...] = (
     ("mt5", "MT5"),
     ("tradingview", "TradingView"),
+    ("binance", "Binance"),
 )
 
 _HIDDEN_KINDS: frozenset[DataSourceKind] = frozenset(
@@ -34,6 +37,7 @@ _HIDDEN_KINDS: frozenset[DataSourceKind] = frozenset(
 _DEFAULT_SYMBOLS: dict[DataSourceKind, str] = {
     "mt5": GOLD_MT5_SYMBOL,
     "tradingview": GOLD_TV_SYMBOL,
+    "binance": BINANCE_DEFAULT_SYMBOL,
     "akshare": A_SHARE_DEFAULT_SYMBOL,
     "eastmoney": A_SHARE_DEFAULT_SYMBOL,
     "eastmoney_futures": "RB0 螺纹钢",
@@ -85,6 +89,12 @@ def create_data_source(kind: str | None) -> DataSource:
         from pa_agent.data.tradingview import TradingViewSource
 
         return TradingViewSource()
+    if normalized == "binance":
+        from pa_agent.config.paths import SETTINGS_JSON_PATH
+        from pa_agent.config.settings import load_settings
+        from pa_agent.data.binance_source import BinanceSource
+
+        return BinanceSource(settings=load_settings(SETTINGS_JSON_PATH))
     if normalized == "eastmoney":
         from pa_agent.data.eastmoney_source import EastMoneySource
 

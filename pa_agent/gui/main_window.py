@@ -436,7 +436,8 @@ class MainWindow(QMainWindow):
         self._data_source_combo.setMinimumWidth(108)
         self._data_source_combo.setToolTip(
             "K 线数据来源：MT5（默认，需终端登录）、"
-            "TradingView（tvDatafeed）、东方财富(A股)（HTTP 直连）"
+            "TradingView（tvDatafeed）、Binance（币安现货，WebSocket 实时，"
+            "可走本地代理）、东方财富(A股)（HTTP 直连）"
         )
         self._data_source_combo.currentIndexChanged.connect(
             self._on_data_source_combo_changed
@@ -1131,6 +1132,8 @@ class MainWindow(QMainWindow):
             line.setPlaceholderText(
                 "A股 6 位 / 港股 1810 / 名称 小米集团；交易所可自动；或 XAUUSD+OANDA"
             )
+        elif kind == "binance":
+            line.setPlaceholderText("币安币对，如 BTCUSDT / ETHUSDT（可输入 BTC/USDT）")
         elif kind == "eastmoney_futures":
             line.setPlaceholderText("选择左侧品种后在此选合约, 或直接输入如 AO2509")
         elif kind in ("akshare", "eastmoney", "tushare"):

@@ -17,6 +17,9 @@ GOLD_TV_EXCHANGE = "OANDA"
 A_SHARE_DEFAULT_SYMBOL = "000001"
 A_SHARE_DEFAULT_TIMEFRAME = "1h"
 
+# Binance 现货默认币对
+BINANCE_DEFAULT_SYMBOL = "BTCUSDT"
+
 # Exchange → correct gold symbol on TradingView (do not use XAUUSD on TVC)
 TV_GOLD_SYMBOL_BY_EXCHANGE: dict[str, str] = {
     "OANDA": "XAUUSD",
@@ -113,6 +116,13 @@ def normalize_gold_symbol_for_kind(kind: str, symbol: str) -> str:
         hk = normalize_hk_tv_code(sym)
         if _is_hk_tv_code(hk):
             return hk
+    if kind == "binance":
+        from pa_agent.data.binance_source import normalize_binance_symbol
+
+        code = normalize_binance_symbol(sym)
+        if code and is_likely_crypto_symbol(code):
+            return code
+        return BINANCE_DEFAULT_SYMBOL
     if not sym or is_likely_crypto_symbol(sym):
         return GOLD_TV_SYMBOL if kind == "tradingview" else GOLD_MT5_SYMBOL
     if kind == "tradingview" and sym.lower().endswith("m") and len(sym) > 2:

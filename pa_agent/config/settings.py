@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 DecisionStance = Literal["conservative", "balanced", "aggressive", "extreme_aggressive"]
-DataSourceKind = Literal["mt5", "tradingview", "akshare", "eastmoney", "eastmoney_futures", "tushare"]
+DataSourceKind = Literal["mt5", "tradingview", "binance", "akshare", "eastmoney", "eastmoney_futures", "tushare"]
 NormalizationMode = Literal["strict", "lenient"]
 
 
@@ -146,6 +146,14 @@ class TushareSettings(BaseModel):
     token: str = ""
 
 
+class BinanceSettings(BaseModel):
+    """Binance 数据源设置（settings.json）."""
+    model_config = ConfigDict(extra="ignore")
+
+    #: 本地代理，如 http://127.0.0.1:7890；留空 = 自动探测常见本地代理端口
+    proxy: str = ""
+
+
 class PushPlusSettings(BaseModel):
     """PushPlus notification settings (settings.json only; no GUI)."""
     model_config = ConfigDict(extra="ignore")
@@ -165,6 +173,7 @@ class Settings(BaseModel):
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     pushplus: PushPlusSettings = Field(default_factory=PushPlusSettings)
     tushare: TushareSettings = Field(default_factory=TushareSettings)
+    binance: BinanceSettings = Field(default_factory=BinanceSettings)
 
 
 def provider_api_key_configured(settings: Settings | None) -> bool:

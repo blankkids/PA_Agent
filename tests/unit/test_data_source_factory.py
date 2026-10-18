@@ -9,6 +9,7 @@ from pa_agent.data.factory import (
     default_tradingview_exchange,
     normalize_data_source_kind,
 )
+from pa_agent.data.binance_source import BinanceSource
 from pa_agent.data.eastmoney_source import EastMoneySource
 from pa_agent.data.mt5 import MT5Source
 from pa_agent.data.tushare_source import TushareSource
@@ -25,6 +26,7 @@ def test_normalize_data_source_kind_hidden_sources():
     assert normalize_data_source_kind("eastmoney") == "eastmoney"
     assert normalize_data_source_kind("tushare") == "tushare"
     assert normalize_data_source_kind("yfinance") == "yfinance"
+    assert normalize_data_source_kind("binance") == "binance"
 
 
 def test_mt5_in_ui_choices():
@@ -42,11 +44,18 @@ def test_tushare_not_in_ui_choices():
     assert "tushare" not in ui_kinds
 
 
+def test_binance_in_ui_choices():
+    """Binance 在 UI 可选列表中（WebSocket 实时行情）."""
+    ui_kinds = {k for k, _ in DATA_SOURCE_CHOICES}
+    assert "binance" in ui_kinds
+
+
 def test_create_data_source_returns_expected_types():
     assert isinstance(create_data_source("mt5"), MT5Source)
     assert isinstance(create_data_source("tradingview"), TradingViewSource)
     assert isinstance(create_data_source("eastmoney"), EastMoneySource)
     assert isinstance(create_data_source("tushare"), TushareSource)
+    assert isinstance(create_data_source("binance"), BinanceSource)
 
 
 def test_default_symbols_per_kind():
@@ -54,6 +63,7 @@ def test_default_symbols_per_kind():
     assert default_symbol_for_kind("tradingview") == "XAUUSD"
     assert default_symbol_for_kind("eastmoney") == "000001"
     assert default_symbol_for_kind("tushare") == "000001"
+    assert default_symbol_for_kind("binance") == "BTCUSDT"
 
 
 def test_default_tradingview_exchange_is_auto():
