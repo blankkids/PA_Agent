@@ -113,3 +113,11 @@ docs/changelog/
 Thumbs.db
 Desktop.ini
 .DS_Store
+# >>> Comet managed project state >>>
+!/.comet/
+/.comet/*
+!/.comet/config.yaml
+# <<< Comet managed project state <<<
+
+# Claude Code 本地配置（不入库）
+.claude/
