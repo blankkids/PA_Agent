@@ -42,6 +42,18 @@ class TradeEntryWorker(QThread):
     def run(self) -> None:
         p = self._plan
         env = "testnet" if self._trader.testnet else "live"
+        # 开新仓前撤销该交易对全部旧挂单：上一笔交易若由止损/止盈触发平仓，
+        # 币安的 CONDITIONAL 条件单相互独立、不会联动取消，残留保护单
+        # 会在旧触发价守着，可能误平新仓。撤单失败不阻断入场（无残留时
+        # 撤单接口亦正常返回）。
+        try:
+            self._trader.cancel_all(p.symbol)
+            append_execution_event({
+                "action": "cleanup_before_entry", "market": p.market, "env": env,
+                "symbol": p.symbol,
+            })
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("入场前清理残留挂单失败（继续入场）: %s", exc)
         try:
             self._trader.verify_clock()
             res = self._trader.place_entry(p)

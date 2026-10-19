@@ -268,6 +268,26 @@ def test_futures_positions_and_algo_orders():
     t.cancel_order("BTCUSDT", 55, algo=True)
 
 
+def test_futures_algo_orders_from_sdk_list_response():
+    """真实 SDK 的 current_all_algo_open_orders 返回列表本身（无 orders 包装）."""
+    t, fake = _trader(FUTURES)
+    fake.current_all_algo_open_orders = lambda symbol=None: _FakeResp([
+        {"algoId": 400000197, "symbol": symbol, "side": "BUY",
+         "orderType": "TAKE_PROFIT_MARKET", "algoType": "CONDITIONAL",
+         "triggerPrice": "0.09748", "quantity": "511.2",
+         "algoStatus": "NEW", "reduceOnly": True},
+    ])
+    orders = t.open_orders("BTCUSDT")
+    algo = [o for o in orders if o["algo"]]
+    assert len(algo) == 1
+    o = algo[0]
+    assert o["order_id"] == 400000197
+    assert o["type"] == "TAKE_PROFIT_MARKET"
+    assert o["stop_price"] == pytest.approx(0.09748)
+    assert o["orig_qty"] == pytest.approx(511.2)
+    assert o["side"] == "BUY" and o["reduce_only"] is True
+
+
 def test_futures_close_market():
     t, fake = _trader(FUTURES)
     res = t.close_position_market("BTCUSDT")

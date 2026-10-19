@@ -302,12 +302,17 @@ class BinanceTrader:
             if self.market == FUTURES:
                 try:
                     resp2 = cli.current_all_algo_open_orders(symbol=symbol)
-                    for o in _get(resp2.data(), "orders", default=[]) or []:
+                    data2 = resp2.data()
+                    # SDK 返回的是列表本身；兼容 dict 包装 {"orders": [...]}
+                    algo_rows = data2 if isinstance(data2, list) else (
+                        _get(data2, "orders", default=[]) or []
+                    )
+                    for o in algo_rows:
                         out.append({
                             "order_id": int(_get(o, "algoId", "orderId", default=0) or 0),
                             "symbol": _get(o, "symbol", default=symbol),
                             "side": _get(o, "side", default=""),
-                            "type": _get(o, "algoType", "type", default=""),
+                            "type": _get(o, "orderType", "algoType", "type", default=""),
                             "price": float(_get(o, "price", default=0) or 0),
                             "orig_qty": float(_get(o, "origQty", "quantity", default=0) or 0),
                             "stop_price": float(_get(o, "triggerPrice", "stopPrice", default=0) or 0),
@@ -316,7 +321,7 @@ class BinanceTrader:
                             "algo": True,
                         })
                 except Exception as exc:  # noqa: BLE001
-                    logger.debug("algo open orders 查询失败: %s", exc)
+                    logger.warning("algo open orders 查询失败: %s", exc)
             return out
         except Exception as exc:  # noqa: BLE001
             raise TradeError.from_exception(exc) from exc
