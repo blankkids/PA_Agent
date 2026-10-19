@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -27,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 _RECV_WINDOW = 10000
 _TIMEOUT_MS = 8000
+
+# camelCase → snake_case：小写字母/数字后跟大写字母处插入下划线
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _snake(name: str) -> str:
+    """``walletBalance`` → ``wallet_balance``（SDK pydantic 模型字段风格）."""
+    return _CAMEL_BOUNDARY.sub("_", name).lower()
 
 _SPOT_PROD = "https://api.binance.com"
 _SPOT_TESTNET = "https://testnet.binance.vision"
@@ -49,13 +58,20 @@ class OrderResult:
 
 
 def _get(d: Any, *names: str, default: Any = None) -> Any:
-    """模型属性或 dict 键取值."""
+    """模型属性或 dict 键取值.
+
+    交易 SDK 的响应是 pydantic 模型，字段名为 snake_case（如
+    ``wallet_balance``）；此处统一按 camelCase 名称（如 ``walletBalance``）
+    取值时自动回退到对应的 snake_case 属性，同时兼容 dict mock。
+    """
     for n in names:
         if isinstance(d, dict):
             if n in d:
                 return d[n]
         else:
             v = getattr(d, n, None)
+            if v is None and n != _snake(n):
+                v = getattr(d, _snake(n), None)
             if v is not None:
                 return v
     return default

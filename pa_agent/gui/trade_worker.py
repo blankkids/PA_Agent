@@ -30,11 +30,14 @@ class TradeEntryWorker(QThread):
         watcher: FillWatcher | None,
         plan: OrderPlan,
         parent=None,
+        *,
+        auto: bool = False,
     ) -> None:
         super().__init__(parent)
         self._trader = trader
         self._watcher = watcher
         self._plan = plan
+        self._auto = auto
 
     def run(self) -> None:
         p = self._plan
@@ -47,7 +50,7 @@ class TradeEntryWorker(QThread):
                 "action": "entry", "market": p.market, "env": env,
                 "symbol": p.symbol, "direction": p.direction,
                 "order_kind": p.order_kind, "error": exc.friendly_message,
-                "binance_code": exc.binance_code,
+                "binance_code": exc.binance_code, "auto": self._auto,
             })
             self.failed.emit(exc.friendly_message)
             return
@@ -59,6 +62,7 @@ class TradeEntryWorker(QThread):
             "qty": res.executed_qty, "avg_price": res.avg_price,
             "status": res.status, "entry": p.entry_price,
             "sl": p.stop_loss, "tp1": p.take_profit_1, "tp2": p.take_profit_2,
+            "auto": self._auto,
         })
 
         if p.order_kind == "market":

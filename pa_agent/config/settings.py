@@ -168,6 +168,8 @@ class BinanceSettings(BaseModel):
     stake_usdt: float = Field(default=100.0, gt=0)
     #: 每笔金额上限（护栏）
     max_stake_usdt: float = Field(default=10000.0, gt=0)
+    #: 全自动模式：跳过人工确认对话框，AI 决策直接按 stake_usdt 下单（实盘慎用）
+    auto_confirm: bool = False
     #: 运行内存明文 Secret（load 时解密填充；序列化排除）
     api_secret: str = Field(default="", exclude=True)
 

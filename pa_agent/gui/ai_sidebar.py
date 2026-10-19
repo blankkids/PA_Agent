@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
+from PyQt6.QtCore import QSize
 from PyQt6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from pa_agent.gui.ai_stream_window import AIStreamPanel
@@ -61,6 +62,13 @@ class AISidebar(QWidget):
     TAB_FUTURE_TREND = 4   # new
     TAB_RAW = 5            # was 4
     TAB_DEBUG = 6          # was 5
+
+    def minimumSizeHint(self):
+        # QTabWidget 的 minimumSizeHint 取所有 tab 页的最大值（决策树可视化
+        # 页的 HUD 文本近 1200px 宽、决策页 540+px 高），会把主窗口的最小
+        # 尺寸撑到 1424x855，窗口在多数屏幕上无法缩小。侧栏允许收缩到该
+        # 下限，更小时由各页内部滚动条兜底。
+        return QSize(360, 420)
 
     def focus_stream(self) -> None:
         """Switch to the live AI output tab (index 0)."""

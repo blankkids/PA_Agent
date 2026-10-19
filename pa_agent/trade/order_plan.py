@@ -163,7 +163,9 @@ def build_order_plan(
         stop_loss=format_by_step(stop_loss, filters.tick_size),
         take_profit_1=format_by_step(tp1, filters.tick_size),
         take_profit_2=format_by_step(tp2, filters.tick_size) if tp2 else None,
-        tp_split=tp2 is not None,
+        # 默认 TP1 全仓止盈；分批（TP1/TP2 各半）仅在人工确认对话框勾选启用，
+        # 全自动路径恒为全仓
+        tp_split=False,
         side=_side_for(market, direction),
     )
 

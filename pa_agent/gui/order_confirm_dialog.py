@@ -5,6 +5,7 @@ import logging
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -50,6 +51,7 @@ class OrderConfirmDialog(QDialog):
         self.setMinimumWidth(480)
         self._setup_ui(testnet)
         self.final_stake: float | None = None
+        self.final_tp_split: bool = False
 
     def _setup_ui(self, testnet: bool) -> None:
         p = self._plan
@@ -86,15 +88,25 @@ class OrderConfirmDialog(QDialog):
         if p.market == FUTURES:
             form.addRow("杠杆:", QLabel(f"{p.leverage} x（名义 {p.stake_usdt * p.leverage:.2f} USDT）"))
         form.addRow("止损 SL:", QLabel(f"<span style='color:#d32f2f'>{p.stop_loss:.6g}</span>"))
-        tp1_txt = f"<span style='color:#2e7d32'>{p.take_profit_1:.6g}</span>"
-        if p.tp_split:
-            tp1_txt += "（出一半）"
-        form.addRow("止盈 TP1:", QLabel(tp1_txt))
-        if p.tp_split and p.take_profit_2:
-            form.addRow("止盈 TP2:", QLabel(
-                f"<span style='color:#2e7d32'>{p.take_profit_2:.6g}</span>（出另一半）"))
+        # 止盈区：默认 TP1 全仓；有 TP2 时提供「分批止盈」勾选（TP1/TP2 各半）
+        self._tp1_label = QLabel()
+        form.addRow("止盈 TP1:", self._tp1_label)
+        if p.take_profit_2:
+            self._tp2_label = QLabel()
+            form.addRow("止盈 TP2:", self._tp2_label)
+            self._split_check = QCheckBox("分批止盈：TP1 出一半，剩余 TP2 出另一半")
+            self._split_check.setToolTip(
+                "默认 TP1 全部止盈；勾选后 TP1/TP2 各平一半仓位，"
+                "止损保护不变（任一止盈成交后剩余仓位仍受止损保护）。"
+            )
+            self._split_check.setChecked(bool(p.tp_split))
+            self._split_check.toggled.connect(self._refresh_tp_labels)
+            form.addRow(self._split_check)
         else:
+            self._tp2_label = None
+            self._split_check = None
             form.addRow("TP2:", QLabel("未设置（TP1 全部止盈）"))
+        self._refresh_tp_labels()
         root.addWidget(box)
 
         stake_box = QGroupBox("本笔金额（USDT）")
@@ -126,6 +138,21 @@ class OrderConfirmDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
+    def _refresh_tp_labels(self) -> None:
+        """按分批勾选状态刷新 TP1/TP2 标签文案."""
+        p = self._plan
+        split = self._split_check is not None and self._split_check.isChecked()
+        tp1 = f"<span style='color:#2e7d32'>{p.take_profit_1:.6g}</span>"
+        self._tp1_label.setText(tp1 + ("（出一半）" if split else "（全部止盈）"))
+        if self._tp2_label is not None:
+            if split:
+                self._tp2_label.setText(
+                    f"<span style='color:#2e7d32'>{p.take_profit_2:.6g}</span>（出另一半）")
+            else:
+                self._tp2_label.setText(
+                    f"<span style='color:#888'>{p.take_profit_2:.6g}</span>"
+                    "（未启用分批，TP1 全部止盈）")
+
     def _on_confirm(self) -> None:
         stake = float(self._stake_spin.value())
         if stake <= 0 or stake > self._max_stake:
@@ -133,4 +160,5 @@ class OrderConfirmDialog(QDialog):
                                 f"金额必须在 (0, {self._max_stake:.2f}] 内。")
             return
         self.final_stake = stake
+        self.final_tp_split = bool(self._split_check and self._split_check.isChecked())
         self.accept()

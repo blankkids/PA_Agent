@@ -120,6 +120,16 @@ class BinanceTradeSettingsDialog(QDialog):
         self._max_stake_spin.setRange(1, 1_000_000)
         self._max_stake_spin.setDecimals(2)
         stake_form.addRow("金额上限:", self._max_stake_spin)
+
+        self._auto_confirm_check = QCheckBox("全自动模式（跳过人工确认，AI 决策直接下单）")
+        self._auto_confirm_check.setStyleSheet("color:#d32f2f;font-weight:bold;")
+        self._auto_confirm_check.setToolTip(
+            "勾选后点击「执行下单」不再弹出确认对话框，"
+            "按上方「每笔金额」直接提交真实订单。\n"
+            "金额上限护栏仍然生效；建议仅在 Testnet 或小额实盘时启用。"
+        )
+        self._auto_confirm_check.toggled.connect(self._on_auto_confirm_toggled)
+        stake_form.addRow(self._auto_confirm_check)
         root.addWidget(stake_box)
 
         buttons = QDialogButtonBox(
@@ -160,6 +170,29 @@ class BinanceTradeSettingsDialog(QDialog):
                 self._testnet_check.setChecked(True)
                 self._testnet_check.blockSignals(False)
 
+    # ── 全自动警告 ───────────────────────────────────────────────────────────
+
+    def _on_auto_confirm_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("⚠ 启用全自动模式")
+        box.setText(
+            "<p style='color:#d32f2f;font-weight:bold;font-size:14px'>"
+            "即将跳过人工确认！</p>"
+            "<p>启用后，AI 每次给出下单决策时将<b>不再弹出确认对话框</b>，"
+            "直接按「每笔金额」以<b>真实资金</b>提交订单（含入场与保护单）。</p>"
+            "<p>金额上限护栏仍然生效；程序关闭/重启后该设置依然保留。</p>"
+        )
+        yes = box.addButton("我已知晓风险，启用全自动", QMessageBox.ButtonRole.AcceptRole)
+        no = box.addButton("保持人工确认", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is no:
+            self._auto_confirm_check.blockSignals(True)
+            self._auto_confirm_check.setChecked(False)
+            self._auto_confirm_check.blockSignals(False)
+
     # ── 读写 ─────────────────────────────────────────────────────────────────
 
     def _load_values(self) -> None:
@@ -174,6 +207,9 @@ class BinanceTradeSettingsDialog(QDialog):
         self._testnet_check.blockSignals(False)
         self._stake_spin.setValue(float(b.stake_usdt))
         self._max_stake_spin.setValue(float(b.max_stake_usdt))
+        self._auto_confirm_check.blockSignals(True)
+        self._auto_confirm_check.setChecked(bool(b.auto_confirm))
+        self._auto_confirm_check.blockSignals(False)
 
     def _on_save(self) -> None:
         b = self._settings.binance
@@ -207,6 +243,7 @@ class BinanceTradeSettingsDialog(QDialog):
         b.testnet = self._testnet_check.isChecked()
         b.stake_usdt = stake
         b.max_stake_usdt = max_stake
+        b.auto_confirm = self._auto_confirm_check.isChecked()
         try:
             save_settings(self._settings, SETTINGS_JSON_PATH)
         except Exception as exc:  # noqa: BLE001

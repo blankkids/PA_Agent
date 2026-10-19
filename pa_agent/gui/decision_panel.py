@@ -14,6 +14,7 @@ from pa_agent.util.trade_metrics import (
 from pa_agent.ai.cycle_enums import format_cycle_position, format_cycle_with_direction, format_trend_label
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -120,6 +121,8 @@ class DecisionPanel(QWidget):
 
     #: 人工确认下单入口（携带决策 dict；仅当数据源/护栏满足时按钮可见）
     order_execute_requested = pyqtSignal(dict)
+    #: 全自动勾选变化（由 MainWindow 写入设置并保存）
+    auto_confirm_toggled = pyqtSignal(bool)
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -306,13 +309,41 @@ class DecisionPanel(QWidget):
         )
         self._execute_order_btn.setVisible(False)
         self._execute_order_btn.clicked.connect(self._on_execute_clicked)
-        layout.addWidget(self._execute_order_btn)
+
+        # 全自动勾选：与 Binance 交易设置双向同步（MainWindow 持有设置）
+        self._auto_confirm_check = QCheckBox("全自动")
+        self._auto_confirm_check.setStyleSheet("color:#d32f2f;font-weight:bold;")
+        self._auto_confirm_check.setToolTip(
+            "勾选后跳过人工确认对话框，按设置的每笔金额直接下单。"
+        )
+        self._auto_confirm_check.toggled.connect(self._on_auto_confirm_toggled)
+        self._auto_confirm_check.setVisible(False)
+
+        exec_row = QWidget()
+        exec_layout = QHBoxLayout(exec_row)
+        exec_layout.setContentsMargins(0, 0, 0, 0)
+        exec_layout.setSpacing(8)
+        exec_layout.addWidget(self._execute_order_btn)
+        exec_layout.addWidget(self._auto_confirm_check)
+        exec_layout.addStretch(1)
+        layout.addWidget(exec_row)
         self._last_decision: dict | None = None
         self._trade_visible_gate: bool = False  # 数据源/护栏由 MainWindow 设置
 
     def _on_execute_clicked(self) -> None:
         if self._last_decision:
             self.order_execute_requested.emit(dict(self._last_decision))
+
+    def _on_auto_confirm_toggled(self, checked: bool) -> None:
+        self._update_execute_button()
+        self.auto_confirm_toggled.emit(checked)
+
+    def set_auto_confirm(self, checked: bool) -> None:
+        """MainWindow 同步设置值到勾选框（不回发信号）."""
+        self._auto_confirm_check.blockSignals(True)
+        self._auto_confirm_check.setChecked(bool(checked))
+        self._auto_confirm_check.blockSignals(False)
+        self._update_execute_button()
 
     def set_execute_enabled(self, enabled: bool) -> None:
         """数据源为 Binance 且交易功能启用时由 MainWindow 置 True."""
@@ -325,7 +356,22 @@ class DecisionPanel(QWidget):
             decision
             and str(decision.get("order_type", "")) in ("限价单", "突破单", "市价单")
         )
-        self._execute_order_btn.setVisible(bool(self._trade_visible_gate and has_order))
+        visible = bool(self._trade_visible_gate and has_order)
+        self._execute_order_btn.setVisible(visible)
+        self._auto_confirm_check.setVisible(visible)
+        auto = self._auto_confirm_check.isChecked()
+        if auto:
+            self._execute_order_btn.setText("⚡ 执行下单（全自动·免确认）")
+            self._execute_order_btn.setStyleSheet(
+                "background:#b3261e;color:white;font-weight:bold;"
+                "border-radius:6px;padding:8px 14px;font-size:14px;"
+            )
+        else:
+            self._execute_order_btn.setText("⚡ 执行下单（人工确认）")
+            self._execute_order_btn.setStyleSheet(
+                "background:#238636;color:white;font-weight:bold;"
+                "border-radius:6px;padding:8px 14px;font-size:14px;"
+            )
 
     def _apply_diag_chip_style(self, label: QLabel, *, color: str) -> None:
         label.setStyleSheet(

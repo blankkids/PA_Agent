@@ -52,16 +52,42 @@ def test_confirm_dialog_stake_capped(qtbot):
 
 
 def test_confirm_dialog_tp_split_labels(qtbot):
+    """默认 TP1 全仓；勾选「分批止盈」后标签切换为各半文案."""
     plan = _plan(tp2=110.0)
     dlg = OrderConfirmDialog(plan, testnet=False, max_stake=500.0)
     qtbot.addWidget(dlg)
-    # 收集全部标签文本：TP 分批说明与实盘徽标必须呈现
     from PyQt6.QtWidgets import QLabel
 
+    # 默认：TP1 全部止盈，TP2 未启用
     all_text = " ".join(l.text() for l in dlg.findChildren(QLabel))
-    assert "TP1" in all_text and "出一半" in all_text
-    assert "TP2" in all_text and "出另一半" in all_text
+    assert "TP1" in all_text and "全部止盈" in all_text
     assert "实盘" in all_text
+    assert dlg._split_check is not None and not dlg._split_check.isChecked()
+
+    # 勾选分批：TP1 出一半 / TP2 出另一半
+    dlg._split_check.setChecked(True)
+    all_text = " ".join(l.text() for l in dlg.findChildren(QLabel))
+    assert "出一半" in all_text and "出另一半" in all_text
+
+
+def test_confirm_dialog_split_checkbox_output(qtbot):
+    """确认输出 final_tp_split：有 TP2 勾选→True；无 TP2 →无勾选框恒 False."""
+    dlg = OrderConfirmDialog(_plan(tp2=110.0), testnet=True, max_stake=500.0)
+    qtbot.addWidget(dlg)
+    dlg._split_check.setChecked(True)
+    dlg._on_confirm()
+    assert dlg.final_tp_split is True
+
+    dlg2 = OrderConfirmDialog(_plan(tp2=110.0), testnet=True, max_stake=500.0)
+    qtbot.addWidget(dlg2)
+    dlg2._on_confirm()
+    assert dlg2.final_tp_split is False
+
+    dlg3 = OrderConfirmDialog(_plan(), testnet=True, max_stake=500.0)
+    qtbot.addWidget(dlg3)
+    assert dlg3._split_check is None
+    dlg3._on_confirm()
+    assert dlg3.final_tp_split is False
 
 
 # ── DecisionPanel 执行按钮 ────────────────────────────────────────────────────
@@ -105,6 +131,33 @@ def test_execute_button_emits_decision(qtbot):
     p.order_execute_requested.connect(received.append)
     p._execute_order_btn.click()
     assert received and received[0]["order_type"] == "市价单"
+
+
+def test_decision_panel_auto_confirm_toggle(qtbot):
+    """全自动勾选：用户勾选发信号；set_auto_confirm 同步不回发；按钮文案联动."""
+    p = DecisionPanel()
+    qtbot.addWidget(p)
+    p.set_execute_enabled(True)
+    p._last_decision = dict(_ORDER_DECISION)
+    p._update_execute_button()
+    assert "人工确认" in p._execute_order_btn.text()
+    assert p._auto_confirm_check.isVisibleTo(p) is True
+
+    got: list[bool] = []
+    p.auto_confirm_toggled.connect(got.append)
+
+    # 用户勾选/取消：发信号，按钮文案切换
+    p._auto_confirm_check.setChecked(True)
+    assert got == [True]
+    assert "全自动" in p._execute_order_btn.text()
+    p._auto_confirm_check.setChecked(False)
+    assert got == [True, False]
+    assert "人工确认" in p._execute_order_btn.text()
+
+    # MainWindow 侧同步（程序写入）：状态变化但不回发信号
+    p.set_auto_confirm(True)
+    assert got == [True, False]
+    assert "全自动" in p._execute_order_btn.text()
 
 
 # ── BinanceTradeSettingsDialog ────────────────────────────────────────────────

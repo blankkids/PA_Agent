@@ -259,7 +259,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             "PA Agent — Trading Terminal（分析仅供参考，不构成投资建议）"
         )
-        self.resize(1440, 900)
+        # 初始尺寸不超过当前屏幕可用区域（小屏笔记本上 1440x900 会超出屏幕）
+        _screen = self.screen()
+        if _screen is not None:
+            _avail = _screen.availableGeometry()
+            self.resize(min(1440, _avail.width()), min(900, _avail.height()))
+        else:
+            self.resize(1440, 900)
         self._ctx = ctx
         self._worker: _AnalysisWorker | None = None
         self._analysis_worker_id: object | None = None
@@ -332,6 +338,9 @@ class MainWindow(QMainWindow):
         try:
             self._decision_panel.order_execute_requested.connect(
                 self._execute_order_flow, Qt.ConnectionType.UniqueConnection
+            )
+            self._decision_panel.auto_confirm_toggled.connect(
+                self._on_auto_confirm_toggled, Qt.ConnectionType.UniqueConnection
             )
         except Exception:  # noqa: BLE001
             pass
@@ -418,8 +427,12 @@ class MainWindow(QMainWindow):
         outer_layout.setSpacing(6)
 
         # ── Control bar ───────────────────────────────────────────────────────
+        # 拆成两行（数据选择 / 分析操作）：单行 22 个控件的布局最小宽度
+        # 超过 1400px，会把主窗口的最小宽度也撑到该值，导致窗口无法缩小。
         ctrl_layout = QHBoxLayout()
         ctrl_layout.setSpacing(8)
+        ctrl_action_layout = QHBoxLayout()
+        ctrl_action_layout.setSpacing(8)
 
         _settings = getattr(self._ctx, "settings", None)
         _last_symbol = "000001"
@@ -581,7 +594,7 @@ class MainWindow(QMainWindow):
         self._fetch_data_btn.setMinimumWidth(90)
         self._fetch_data_btn.setToolTip("开始从当前数据源持续拉取 K 线数据并实时更新图表")
         self._fetch_data_btn.clicked.connect(self._on_fetch_data_clicked)
-        ctrl_layout.addWidget(self._fetch_data_btn)
+        ctrl_action_layout.addWidget(self._fetch_data_btn)
 
         self._wait_close_checkbox = QCheckBox("等待最新K线收盘后再提交分析")
         self._wait_close_checkbox.setObjectName("waitCloseCheckbox")
@@ -590,18 +603,18 @@ class MainWindow(QMainWindow):
             "勾选后，点击提交分析将先等待当前未收盘K线走完，再抓取数据并开始分析"
         )
         self._wait_close_checkbox.stateChanged.connect(self._on_wait_close_checkbox_changed)
-        ctrl_layout.addWidget(self._wait_close_checkbox)
+        ctrl_action_layout.addWidget(self._wait_close_checkbox)
 
         self._wait_close_countdown_label = QLabel("")
         self._wait_close_countdown_label.setObjectName("mutedLabel")
         self._wait_close_countdown_label.setMinimumWidth(100)
-        ctrl_layout.addWidget(self._wait_close_countdown_label)
+        ctrl_action_layout.addWidget(self._wait_close_countdown_label)
 
         self._submit_btn = QPushButton("提交分析")
         self._submit_btn.setObjectName("primaryButton")
         self._submit_btn.setMinimumWidth(100)
         self._submit_btn.clicked.connect(self._on_submit_analysis)
-        ctrl_layout.addWidget(self._submit_btn)
+        ctrl_action_layout.addWidget(self._submit_btn)
 
         # Incremental button is kept for programmatic use but hidden from the
         # toolbar — the submit button's label changes to "增量分析" automatically
@@ -629,7 +642,7 @@ class MainWindow(QMainWindow):
             "勾选后，每当有新的K线收盘时自动开始新一轮分析"
         )
         self._keep_analysis_checkbox.stateChanged.connect(self._on_keep_analysis_checkbox_changed)
-        ctrl_layout.addWidget(self._keep_analysis_checkbox)
+        ctrl_action_layout.addWidget(self._keep_analysis_checkbox)
 
         # Reset persisted keep_analysis flag so future restarts also start unchecked
         if _settings is not None:
@@ -644,24 +657,25 @@ class MainWindow(QMainWindow):
             "恢复 K 线实时刷新；最右侧未收盘 K 线为浅色空心 K 线，不参与 AI 分析"
         )
         self._resume_chart_btn.clicked.connect(self._on_resume_chart_refresh)
-        ctrl_layout.addWidget(self._resume_chart_btn)
+        ctrl_action_layout.addWidget(self._resume_chart_btn)
 
         self._fit_chart_btn = QPushButton("恢复图表")
         self._fit_chart_btn.setToolTip(
             "自动调整图表缩放，将 K 线和价格线适配到可视区域"
         )
         self._fit_chart_btn.clicked.connect(self._on_fit_chart)
-        ctrl_layout.addWidget(self._fit_chart_btn)
+        ctrl_action_layout.addWidget(self._fit_chart_btn)
 
         self._decision_badge = QLabel("")
         self._decision_badge.setObjectName("mutedLabel")
-        ctrl_layout.addWidget(self._decision_badge)
+        ctrl_action_layout.addWidget(self._decision_badge)
 
         self._ai_mode_label = QLabel("")
         self._ai_mode_label.setObjectName("mutedLabel")
-        ctrl_layout.addWidget(self._ai_mode_label)
+        ctrl_action_layout.addWidget(self._ai_mode_label)
 
         outer_layout.addLayout(ctrl_layout)
+        outer_layout.addLayout(ctrl_action_layout)
 
         self._api_key_alert_label = QLabel(
             "未配置 API Key：请点击左上角「AI 模型」按钮，在设置中填写 API Key 后才能进行 AI 分析。"
@@ -4132,6 +4146,23 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "_decision_panel", None)
         if panel is not None:
             panel.set_execute_enabled(self._binance_trade_gate())
+            cfg = self._binance_cfg()
+            panel.set_auto_confirm(bool(cfg and getattr(cfg, "auto_confirm", False)))
+
+    def _on_auto_confirm_toggled(self, checked: bool) -> None:
+        """决策面板「全自动」勾选 → 写入设置并持久化."""
+        settings = getattr(self._ctx, "settings", None)
+        cfg = self._binance_cfg()
+        if settings is None or cfg is None:
+            return
+        cfg.auto_confirm = bool(checked)
+        try:
+            from pa_agent.config.paths import SETTINGS_JSON_PATH
+            from pa_agent.config.settings import save_settings
+
+            save_settings(settings, SETTINGS_JSON_PATH)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("保存 auto_confirm 失败: %s", exc)
 
     def _make_trade_trader(self):
         from pa_agent.trade.binance_trader import BinanceTrader
@@ -4305,20 +4336,33 @@ class MainWindow(QMainWindow):
 
         from pa_agent.gui.order_confirm_dialog import OrderConfirmDialog
 
-        dlg = OrderConfirmDialog(plan, testnet=bool(cfg.testnet),
-                                 max_stake=max_stake, parent=self)
-        if dlg.exec() != OrderConfirmDialog.DialogCode.Accepted or dlg.final_stake is None:
-            return
-        final_stake = float(dlg.final_stake)
-        if final_stake != plan.stake_usdt:
+        auto_confirm = bool(getattr(cfg, "auto_confirm", False))
+        if auto_confirm:
+            # 全自动：跳过人工确认对话框，直接按设置的每笔金额下单。
+            # 金额上限护栏保留（设置保存时已校验，此处防御性复查）。
+            if plan.stake_usdt > max_stake:
+                QMessageBox.warning(
+                    self, "金额超限（全自动拦截）",
+                    f"每笔金额 {plan.stake_usdt:.2f} 超过金额上限 {max_stake:.2f}，"
+                    "已阻止下单；请在交易设置中调整。")
+                return
+            self._status_bar.showMessage(
+                f"全自动模式：跳过人工确认，按 {plan.stake_usdt:.2f} USDT 直接提交订单")
+        else:
+            dlg = OrderConfirmDialog(plan, testnet=bool(cfg.testnet),
+                                     max_stake=max_stake, parent=self)
+            if dlg.exec() != OrderConfirmDialog.DialogCode.Accepted or dlg.final_stake is None:
+                return
+            final_stake = float(dlg.final_stake)
             from dataclasses import replace
 
-            plan = replace(plan, stake_usdt=final_stake)
+            plan = replace(plan, stake_usdt=final_stake,
+                           tp_split=bool(dlg.final_tp_split))
 
         from pa_agent.gui.trade_worker import TradeEntryWorker
 
         self._trade_worker = TradeEntryWorker(
-            trader, self._ensure_fill_watcher(), plan)
+            trader, self._ensure_fill_watcher(), plan, auto=auto_confirm)
         self._trade_worker.succeeded.connect(
             lambda msg: (self._status_bar.showMessage(msg[:120]),
                          QMessageBox.information(self, "下单成功", msg)))

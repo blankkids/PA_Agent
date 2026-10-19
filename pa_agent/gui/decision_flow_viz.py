@@ -858,6 +858,9 @@ class DecisionFlowVizPanel(QWidget):
 
         self._hud_label = QLabel("")
         self._hud_label.setTextFormat(Qt.TextFormat.RichText)
+        # HUD 文本较长：不换行时 QLabel 的 minimumSizeHint 等于整行文本宽度
+        # （近 1200px），会把所在 tab 乃至主窗口的最小宽度撑爆。
+        self._hud_label.setWordWrap(True)
         self._hud_label.setStyleSheet(
             f"background-color: rgba(5, 13, 24, 220);"
             f"border: 1px solid {_NEON_CYAN}; border-radius: 8px;"
