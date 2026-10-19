@@ -4384,9 +4384,24 @@ class MainWindow(QMainWindow):
 
     def _maybe_alert_order_opportunity(self, decision_inner: dict) -> bool:
         """Beep, popup, and focus decision tab when stage-2 proposes an order."""
-        if not self._order_opportunity_alert_enabled():
-            return False
         if not self._has_order_opportunity(decision_inner):
+            return False
+
+        # 全自动模式：AI 给出下单决策后不再弹警报等待人工点击，
+        # 直接进入执行流程（内部跳过确认对话框，护栏仍生效）；
+        # 不受警报弹窗开关影响——全自动即完全免打扰
+        cfg = self._binance_cfg()
+        if (
+            bool(cfg and getattr(cfg, "auto_confirm", False))
+            and self._binance_trade_gate()
+        ):
+            sidebar = getattr(self, "_ai_sidebar", None)
+            if sidebar is not None:
+                sidebar.focus_decision()
+            self._execute_order_flow(decision_inner)
+            return True
+
+        if not self._order_opportunity_alert_enabled():
             return False
 
         from pa_agent.gui.order_opportunity import (
