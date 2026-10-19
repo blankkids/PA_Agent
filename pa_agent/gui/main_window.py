@@ -4384,7 +4384,17 @@ class MainWindow(QMainWindow):
 
     def _maybe_alert_order_opportunity(self, decision_inner: dict) -> bool:
         """Beep, popup, and focus decision tab when stage-2 proposes an order."""
+        from pa_agent.gui.order_opportunity import ORDER_OPPORTUNITY_TYPES
+
         if not self._has_order_opportunity(decision_inner):
+            # 有下单类型但置信度不足门槛：给出可见提示，
+            # 避免"出现交易信号却没有任何反应"的困惑
+            if str(decision_inner.get("order_type") or "") in ORDER_OPPORTUNITY_TYPES:
+                conf = decision_inner.get("trade_confidence")
+                self._status_bar.showMessage(
+                    f"下单信号置信度 {conf}% 低于门槛 "
+                    f"{self._confidence_threshold()}%，未触发自动执行/警报"
+                )
             return False
 
         # 全自动模式：AI 给出下单决策后不再弹警报等待人工点击，
