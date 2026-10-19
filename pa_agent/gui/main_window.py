@@ -290,6 +290,8 @@ class MainWindow(QMainWindow):
         self._keep_analysis_last_closed_ts: int | None = None  # tracks last closed bar for keep-analysis
         self._keep_analysis_submit_closed_ts: int | None = None  # closed bar ts at analysis submit time
         self._free_chat_session: Any = None
+        # 活跃 QThread 墓地：持有强引用直到线程真正结束（见 _track_worker）
+        self._live_workers: set = set()
         self._last_stage1_diagnosis: dict | None = None
         self._last_analysis_record: Any = None
         self._last_analysis_frame: Any = None  # KlineFrame of the most recent analysis
@@ -3015,6 +3017,7 @@ class MainWindow(QMainWindow):
         worker = SnapshotFetchWorker(
             data_source, bar_count + INDICATOR_WARMUP_BARS + 5, parent=None
         )
+        self._track_worker(worker)
         # Use a generation token so that stale callbacks from a cancelled
         # worker are silently ignored (closures can't easily be disconnected).
         fetch_id = object()
@@ -3090,6 +3093,7 @@ class MainWindow(QMainWindow):
             parent=None,
         )
         self._prep_worker = prep
+        self._track_worker(prep)
 
         def _on_ready(result: Any) -> None:
             if getattr(self, "_prep_worker_id", None) is not prep_id:
@@ -3201,6 +3205,7 @@ class MainWindow(QMainWindow):
             incremental_new_bar_count=incremental_new_bar_count,
             parent=None,
         )
+        self._track_worker(self._worker)
         def _on_worker_finished(decision: dict) -> None:
             if getattr(self, "_analysis_worker_id", None) is not worker_id:
                 return
@@ -4283,6 +4288,7 @@ class MainWindow(QMainWindow):
 
         self._scan_worker = _ScanWorker(self)
         self._scan_worker.done.connect(_on_scan)
+        self._track_worker(self._scan_worker)
         self._scan_worker.start()
 
     def _execute_order_flow(self, decision: dict) -> None:
@@ -4363,6 +4369,7 @@ class MainWindow(QMainWindow):
 
         self._trade_worker = TradeEntryWorker(
             trader, self._ensure_fill_watcher(), plan, auto=auto_confirm)
+        self._track_worker(self._trade_worker)
         self._trade_worker.succeeded.connect(
             lambda msg: (self._status_bar.showMessage(msg[:120]),
                          QMessageBox.information(self, "下单成功", msg)))
@@ -4415,6 +4422,29 @@ class MainWindow(QMainWindow):
         flow_viz.schedule_refit_view(delay_ms=0)
         QTimer.singleShot(120, flow_viz.play_path)
 
+    def _track_worker(self, worker) -> None:
+        """持有 QThread 引用直到线程真正结束.
+
+        QThread 的最后一个 Python 引用若在线程收尾前被释放（finished
+        回调里置 None、或新一轮任务直接覆盖旧引用），C++ 对象会以
+        "still running" 状态析构，触发 "QThread: Destroyed while
+        thread is still running" 并可能崩溃。这里用集合持有强引用，
+        finished 后交给 deleteLater 安全回收。
+
+        注意部分 worker（如 _AnalysisWorker）自定义了带参 finished
+        信号遮蔽 QThread 原生无参版本，因此槽函数必须吸收任意参数，
+        且释放引用延迟一拍，确保 run() 已返回。
+        """
+        self._live_workers.add(worker)
+        worker.finished.connect(worker.deleteLater)
+
+        def _release(*_args) -> None:
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, lambda: self._live_workers.discard(worker))
+
+        worker.finished.connect(_release)
+
     def _on_worker_done(self) -> None:
         """Reset in-progress flag and re-enable the submit button."""
         if not self._ui_is_alive():
@@ -4463,6 +4493,11 @@ class MainWindow(QMainWindow):
             self._stop_refresh_loop()
         except RuntimeError as exc:
             logger.debug("Shutdown cleanup skipped: %s", exc)
+        # 持有中的 QThread（下单/扫描/预处理等）：有限等待线程收尾，
+        # 避免窗口销毁时以 running 状态析构 QThread
+        for w in list(getattr(self, "_live_workers", ())):
+            if _qobject_alive(w) and w.isRunning():
+                w.wait(_WORKER_JOIN_TIMEOUT_MS)
         super().closeEvent(event)
 
     def showEvent(self, event: QShowEvent | None) -> None:
